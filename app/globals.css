@@ -712,13 +712,7 @@ body {
 .hud-wallet { justify-self: end; min-width: 0; max-width: 100%; overflow: hidden; padding: 8px 14px 9px; }
 .hud-coins { display: flex; align-items: center; justify-content: flex-end; gap: 11px; color: #fff2cc; font: 600 25px var(--serif); line-height: 1.05; font-variant-numeric: tabular-nums; }
 .hud-coins strong { min-width: 0; max-width: 11ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: clamp(12px, 4vw, 25px); }
-.coin-stack { position: relative; width: 42px; height: 35px; display: inline-block; flex: 0 0 auto; filter: drop-shadow(0 3px 3px rgba(8, 12, 8, .35)); }
-.coin-stack-back,
-.coin-stack-middle,
-.coin-stack-face { position: absolute; display: grid; place-items: center; width: 30px; height: 30px; border: 2px solid #f2d883; border-radius: 50%; background: radial-gradient(circle at 35% 28%, #fff1ae 0 7%, #ebc45d 25%, #b57c27 73%, #79511e 100%); box-shadow: inset 0 0 0 2px #c49137, inset 0 -3px 5px rgba(98, 57, 13, .32); }
-.coin-stack-back { left: 11px; top: 4px; opacity: .95; }
-.coin-stack-middle { left: 5px; top: 2px; }
-.coin-stack-face { left: 0; top: 0; color: #845a1f; font: 700 16px Georgia, serif; text-shadow: 0 1px #fff0ae; }
+.coin-single { width: 31px; height: 31px; display: grid; flex: 0 0 auto; place-items: center; border: 2px solid #f2d883; border-radius: 50%; color: #845a1f; background: radial-gradient(circle at 35% 28%, #fff1ae 0 7%, #ebc45d 25%, #b57c27 73%, #79511e 100%); box-shadow: inset 0 0 0 2px #c49137, inset 0 -3px 5px rgba(98, 57, 13, .32), 0 3px 4px rgba(8, 12, 8, .35); font: 700 16px Georgia, serif; text-shadow: 0 1px #fff0ae; }
 .hud-chests { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 7px; color: #e2ddc4; font: 500 10px var(--sans); }
 .hud-chests svg { color: #e7c57e; }
 .hud-daily { margin-top: 5px; color: rgba(236, 235, 211, .71); text-align: right; font: 8px var(--mono); letter-spacing: .25px; white-space: nowrap; }
@@ -827,7 +821,7 @@ body {
   .hud-wallet { min-width: 0; padding: 6px 8px; }
   .hud-coins { min-width: 0; gap: 6px; font-size: 19px; }
   .hud-coins strong { max-width: 8ch; font-size: clamp(12px, 4vw, 19px); }
-  .coin-stack { width: 33px; height: 28px; transform: scale(.82); transform-origin: right center; margin-right: -3px; }
+  .coin-single { width: 25px; height: 25px; font-size: 13px; }
   .hud-chests { gap: 4px; margin-top: 3px; font-size: 8px; }
   .hud-chests svg { width: 12px; height: 12px; }
   .hud-daily { margin-top: 2px; font-size: 6px; letter-spacing: -.2px; }

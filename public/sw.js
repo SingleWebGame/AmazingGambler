@@ -1,7 +1,8 @@
-const CACHE_NAME = "amazing-gambler-v3";
+const CACHE_NAME = "amazing-gambler-v4";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
+  "/icon.svg",
   "/icon-192.png",
   "/icon-512.png",
   "/icon-maskable.svg",

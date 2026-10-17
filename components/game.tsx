@@ -1177,7 +1177,7 @@ export default function Game() {
           {game.overflow && <span className="hud-overflow">FORTUNE READY</span>}
         </div>
         <div className="hud-wallet glass-panel">
-          <div className="hud-coins"><span className="coin-stack" aria-hidden="true"><span className="coin-stack-back" /><span className="coin-stack-middle" /><span className="coin-stack-face">$</span></span><strong title={displayMoney.toLocaleString()}>{formatCoinBalance(displayMoney)}</strong></div>
+          <div className="hud-coins"><span className="coin-single" aria-hidden="true">$</span><strong title={displayMoney.toLocaleString()}>{formatCoinBalance(displayMoney)}</strong></div>
           <div className="hud-chests"><Icon name="treasure" size={14} /><span>{displayChests} chests found</span></div>
           <div className={`hud-daily ${displayMoney === 0 ? "hud-daily-waiting" : ""}`}>{displayMoney === 0 ? `Daily pouch · +100 in ${dailyCountdown}` : `+100 daily · ${dailyCountdown}`}</div>
         </div>
