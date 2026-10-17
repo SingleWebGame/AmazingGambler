@@ -1,3 +1,5 @@
+import type { CharacterRarity } from "./characters";
+
 export type Direction = "north" | "east" | "south" | "west";
 export type EventKind = "chest" | "item" | "trap" | "quiet";
 
@@ -18,13 +20,10 @@ export interface ItemDefinition {
   apply: (stats: Record<string, number>) => Record<string, number>;
 }
 
-export interface ChestDefinition {
-  id: string;
-  label: string;
-  reward: number;
-  color: string;
-  weight: number;
-}
+export type CoinChestRarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary" | "Mythic";
+export type ChestDrop =
+  | { kind: "coins"; rarity: CoinChestRarity; reward: number; color: string; label: string }
+  | { kind: "character"; rarity: CharacterRarity; reward: 0; color: string; label: string; characterId: string };
 
 export type CosmeticCategory = "frame" | "theme" | "trail" | "icon" | "badge";
 
@@ -50,7 +49,26 @@ export interface Junction {
   id: number;
   options: Direction[];
   hazards: Direction[];
+  chests: Partial<Record<Direction, ChestDrop>>;
 }
+
+export const coinChestRewards: { rarity: CoinChestRarity; reward: number; color: string; weight: number }[] = [
+  { rarity: "Common", reward: 10, color: "#f3dfa0", weight: 48 },
+  { rarity: "Uncommon", reward: 30, color: "#f4d17c", weight: 28 },
+  { rarity: "Rare", reward: 100, color: "#f4c464", weight: 15 },
+  { rarity: "Epic", reward: 300, color: "#f6d77e", weight: 6.5 },
+  { rarity: "Legendary", reward: 700, color: "#ffeb9c", weight: 2 },
+  { rarity: "Mythic", reward: 1000, color: "#fff6c4", weight: 0.5 },
+];
+
+export const characterChestColors: Record<CharacterRarity, string> = {
+  Common: "#c9afe6",
+  Uncommon: "#bd9ce5",
+  Rare: "#ae84df",
+  Epic: "#a475df",
+  Legendary: "#cc9bf5",
+  "Ultra-rare": "#f0d5ff",
+};
 
 export interface Progress {
   totalEarned: number;
@@ -77,13 +95,6 @@ export const itemDefinitions: ItemDefinition[] = [
       luck: Math.min(100, (stats.luck ?? 0) + Math.floor(Math.random() * 6)),
     }),
   },
-];
-
-export const chestDefinitions: ChestDefinition[] = [
-  { id: "grey", label: "Pocket change", reward: 10, color: "#8e9698", weight: 64 },
-  { id: "blue", label: "Sapphire chest", reward: 100, color: "#4d94d1", weight: 25 },
-  { id: "gold", label: "Golden chest", reward: 500, color: "#e3a83d", weight: 9 },
-  { id: "royal", label: "Royal fortune", reward: 2000, color: "#ca7ebc", weight: 2 },
 ];
 
 export const cosmeticDefinitions: CosmeticDefinition[] = [
@@ -144,34 +155,78 @@ export function createJunction(id: number, cameFrom?: Direction): Junction {
     Math.random() < 0.35
       ? [options[Math.floor(Math.random() * options.length)]]
       : [];
-  return { id, options, hazards };
+  return { id, options, hazards, chests: {} };
 }
 
-export function rollChest(luck: number): ChestDefinition {
-  const boosted = luck > 80;
-  const weights = chestDefinitions.map((chest) => ({
-    chest,
-    weight:
-      boosted && chest.id !== "grey"
-        ? chest.weight * (chest.id === "royal" ? 1.18 : chest.id === "gold" ? 1.1 : 1.04)
-        : boosted
-          ? chest.weight * 0.94
-          : chest.weight,
-  }));
-  const total = weights.reduce((sum, entry) => sum + entry.weight, 0);
+export function rollCoinChest(): ChestDrop {
+  const total = coinChestRewards.reduce((sum, entry) => sum + entry.weight, 0);
   let roll = Math.random() * total;
-  for (const entry of weights) {
+  for (const entry of coinChestRewards) {
     roll -= entry.weight;
-    if (roll <= 0) return entry.chest;
+    if (roll <= 0) {
+      return { kind: "coins", rarity: entry.rarity, reward: entry.reward, color: entry.color, label: `${entry.rarity} coin chest` };
+    }
   }
-  return chestDefinitions[0];
+  const common = coinChestRewards[0];
+  return { kind: "coins", rarity: common.rarity, reward: common.reward, color: common.color, label: `${common.rarity} coin chest` };
+}
+
+export function rollCharacterChest(ownedIds: string[], available: { id: string; rarity: CharacterRarity; name: string }[]): ChestDrop | null {
+  const unowned = available.filter((character) => !ownedIds.includes(character.id));
+  if (!unowned.length) return null;
+  const weights: Record<CharacterRarity, number> = {
+    Common: 40,
+    Uncommon: 27,
+    Rare: 17,
+    Epic: 10,
+    Legendary: 5,
+    "Ultra-rare": 1,
+  };
+  const byRarity = unowned.reduce((groups, character) => {
+    groups[character.rarity].push(character);
+    return groups;
+  }, {
+    Common: [], Uncommon: [], Rare: [], Epic: [], Legendary: [], "Ultra-rare": [],
+  } as Record<CharacterRarity, typeof unowned>);
+  const eligible = (Object.keys(weights) as CharacterRarity[]).filter((rarity) => byRarity[rarity].length);
+  const total = eligible.reduce((sum, rarity) => sum + weights[rarity], 0);
+  let roll = Math.random() * total;
+  let rarity = eligible[0];
+  for (const candidate of eligible) {
+    roll -= weights[candidate];
+    if (roll <= 0) {
+      rarity = candidate;
+      break;
+    }
+  }
+  const candidates = byRarity[rarity];
+  const character = candidates[Math.floor(Math.random() * candidates.length)];
+  return {
+    kind: "character",
+    rarity,
+    reward: 0,
+    color: characterChestColors[rarity],
+    label: `${rarity} character chest`,
+    characterId: character.id,
+  };
+}
+
+export function rollPathChest(
+  ownedIds: string[],
+  available: { id: string; rarity: CharacterRarity; name: string }[],
+): ChestDrop | null {
+  if (Math.random() >= 0.14) return null;
+  if (Math.random() < 0.035) {
+    const characterChest = rollCharacterChest(ownedIds, available);
+    if (characterChest) return characterChest;
+  }
+  return rollCoinChest();
 }
 
 export function rollEvent(luck: number): EventKind {
   const rareRoll = Math.random() + (luck > 80 ? 0.025 : 0);
   if (rareRoll < 0.13) return "trap";
   if (rareRoll < 0.28) return "item";
-  if (rareRoll < 0.48) return "chest";
   return "quiet";
 }
 

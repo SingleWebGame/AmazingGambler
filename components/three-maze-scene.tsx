@@ -4,18 +4,22 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import {
   directionVectors,
+  type ChestDrop,
   type Direction,
   type Junction,
 } from "@/lib/game";
+import { characterById as explorerById, starterCharacters } from "@/lib/characters";
 
 type SceneProps = {
   junction: Junction;
   explorer: { x: number; y: number };
-  phase: "walking" | "choosing" | "approaching" | "moving" | "result" | "idle";
+  phase: "walking" | "choosing" | "approaching" | "moving" | "chest" | "result" | "idle";
   previous?: Direction;
   bets: Record<Direction, number>;
   avatar: string;
+  characterId: string;
   onPathHoldStart: (direction: Direction) => void;
+  onChestReached: () => void;
   theme: string;
   frame: string;
   trail: string;
@@ -25,12 +29,17 @@ type SceneProps = {
 
 type SceneAssets = {
   scene: THREE.Scene;
+  environment: THREE.Group;
   camera: THREE.OrthographicCamera;
   hemisphere: THREE.HemisphereLight;
   sun: THREE.DirectionalLight;
   renderer: THREE.WebGLRenderer;
   dynamic: THREE.Group;
   paths: THREE.Group;
+  chests: THREE.Group;
+  chestPoolGroup: THREE.Group;
+  chestPool: THREE.Group[];
+  chestIconTextures: Record<ChestDrop["kind"], THREE.CanvasTexture>;
   markerMeshes: THREE.Mesh[];
   fireflies: { mesh: THREE.Mesh; phase: number; radius: number; speed: number }[];
   explorer: THREE.Group;
@@ -41,11 +50,101 @@ type SceneAssets = {
   pointer: THREE.Vector2;
   movement: { from: THREE.Vector3; to: THREE.Vector3; startedAt: number; duration: number; facing: number } | null;
   suspenseStartedAt: number | null;
+  chestPickedUp: boolean;
   orientationAngle: number;
   routeIndicatorElements: Partial<Record<Direction, HTMLSpanElement>>;
 };
 
 const directions: Direction[] = ["north", "east", "south", "west"];
+type EnvironmentBiome = {
+  name: string;
+  skyDay: string;
+  skyNight: string;
+  island: string;
+  soil: string;
+  grass: string;
+  center: string;
+  path: string;
+  pathLine: string;
+  foliage: string[];
+  scrub: string;
+};
+const environmentBiomes: EnvironmentBiome[] = [
+  {
+    name: "Golden Savanna",
+    skyDay: "#c4d2b5",
+    skyNight: "#344651",
+    island: "#ae8550",
+    soil: "#79513a",
+    grass: "#c6a15d",
+    center: "#dfc58e",
+    path: "#d7b777",
+    pathLine: "#f5e5b6",
+    foliage: ["#667747", "#7b8550", "#8a9255"],
+    scrub: "#90794b",
+  },
+  {
+    name: "Baobab Woodland",
+    skyDay: "#b9d4ca",
+    skyNight: "#293f48",
+    island: "#718568",
+    soil: "#674b3a",
+    grass: "#8a9b6c",
+    center: "#d3bd8a",
+    path: "#c9b187",
+    pathLine: "#efe0b8",
+    foliage: ["#466548", "#567650", "#6d8657"],
+    scrub: "#66794e",
+  },
+  {
+    name: "Sandstone Ruins",
+    skyDay: "#d1c7aa",
+    skyNight: "#403d43",
+    island: "#9b7958",
+    soil: "#624535",
+    grass: "#a18a61",
+    center: "#c5a277",
+    path: "#c2a078",
+    pathLine: "#ead3a4",
+    foliage: ["#62704b", "#788050", "#8b8a58"],
+    scrub: "#8a7450",
+  },
+  {
+    name: "Tropical Forest",
+    skyDay: "#a9cfc0",
+    skyNight: "#203d42",
+    island: "#4f765d",
+    soil: "#634936",
+    grass: "#668b62",
+    center: "#cfbd8e",
+    path: "#c2ad7f",
+    pathLine: "#e8ddb3",
+    foliage: ["#315e49", "#417454", "#568358"],
+    scrub: "#4c754e",
+  },
+  {
+    name: "Sahel Stone Trail",
+    skyDay: "#d4c6a4",
+    skyNight: "#414756",
+    island: "#a17d54",
+    soil: "#704c37",
+    grass: "#bb9a64",
+    center: "#d4b888",
+    path: "#d0ae7e",
+    pathLine: "#f1dfb6",
+    foliage: ["#66734b", "#7a7b4d", "#8b8552"],
+    scrub: "#8b764e",
+  },
+];
+export const environmentForRoom = (room: number) =>
+  environmentBiomes[Math.floor(Math.max(0, room - 1) / 5) % environmentBiomes.length];
+const rarityGlow = (color: string) => new THREE.MeshStandardMaterial({
+  color,
+  emissive: color,
+  emissiveIntensity: 0.45,
+  roughness: 0.4,
+  flatShading: true,
+});
 const reverseDirection: Record<Direction, Direction> = {
   north: "south",
   east: "west",
@@ -98,35 +197,6 @@ function makeLabelTexture(label: string, color: string) {
   return texture;
 }
 
-function addTree(
-  parent: THREE.Group,
-  x: number,
-  z: number,
-  scale: number,
-  palette: THREE.Material[],
-  seed: number,
-) {
-  const tree = new THREE.Group();
-  tree.position.set(x, 0.1, z);
-  tree.scale.setScalar(scale);
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.19, 0.95, 5), makeMaterial("#76563b"));
-  trunk.position.y = 0.47;
-  trunk.castShadow = true;
-  tree.add(trunk);
-  for (let layer = 0; layer < 3; layer++) {
-    const radius = 0.72 - layer * 0.14;
-    const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(radius, 1.06, 5 + ((seed + layer) % 2)),
-      palette[(seed + layer) % palette.length],
-    );
-    cone.position.y = 1.05 + layer * 0.43;
-    cone.rotation.y = seed * 0.71 + layer * 0.38;
-    cone.castShadow = true;
-    tree.add(cone);
-  }
-  parent.add(tree);
-}
-
 function addHedge(
   parent: THREE.Group,
   x: number,
@@ -154,34 +224,182 @@ function addHedge(
   parent.add(hedge);
 }
 
-function buildForest(scene: THREE.Scene, tint: boolean) {
-  const forest = new THREE.Group();
-  const greens = tint
-    ? ["#263c39", "#36534a", "#4e6953", "#405b50"].map((color) => makeMaterial(color))
-    : ["#68845d", "#7f9865", "#526f59", "#91a66f"].map((color) => makeMaterial(color));
-  for (let i = 0; i < 56; i++) {
-    const angle = (i * 2.399963) % (Math.PI * 2);
-    const radius = 7.7 + (i % 7) * 0.65;
-    const x = Math.cos(angle) * radius;
-    const z = Math.sin(angle) * radius * 0.72;
-    addTree(forest, x, z, 0.66 + (i % 4) * 0.12, greens, i);
+function addAcacia(parent: THREE.Group, x: number, z: number, scale: number, palette: string[], seed: number) {
+  const tree = new THREE.Group();
+  tree.position.set(x, 0.1, z);
+  tree.scale.setScalar(scale);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.24, 1.75, 5), makeMaterial("#76533a"));
+  trunk.position.y = 0.86;
+  trunk.castShadow = true;
+  tree.add(trunk);
+  for (let branch = -1; branch <= 1; branch++) {
+    const canopy = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.78 + (seed % 3) * 0.06, 0),
+      makeMaterial(palette[(seed + branch + 3) % palette.length]),
+    );
+    canopy.scale.set(1.38, 0.39, 0.9);
+    canopy.position.set(branch * 0.47, 1.92 + (seed % 2) * 0.12, branch * 0.15);
+    canopy.castShadow = true;
+    tree.add(canopy);
   }
-  for (let i = 0; i < 36; i++) {
-    const angle = i * 2.399963 + 0.24;
-    const radius = 5.3 + (i % 5) * 0.42;
-    const x = Math.cos(angle) * radius;
-    const z = Math.sin(angle) * radius * 0.7;
-    addHedge(forest, x, z, 0.56 + (i % 3) * 0.1, i % 2 ? "#577451" : "#66835a");
-  }
-  scene.add(forest);
+  parent.add(tree);
 }
 
-function buildPath(scene: THREE.Group, direction: Direction, open: boolean) {
+function addBaobab(parent: THREE.Group, x: number, z: number, scale: number, palette: string[], seed: number) {
+  const tree = new THREE.Group();
+  tree.position.set(x, 0.1, z);
+  tree.scale.setScalar(scale);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.66, 0.9, 2.65, 7), makeMaterial("#805c43"));
+  trunk.position.y = 1.3;
+  trunk.castShadow = true;
+  tree.add(trunk);
+  for (let branch = 0; branch < 5; branch++) {
+    const angle = branch * Math.PI * 0.4 + seed;
+    const limb = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.25, 1.05, 5), makeMaterial("#805c43"));
+    limb.position.set(Math.cos(angle) * 0.73, 2.6, Math.sin(angle) * 0.73);
+    limb.rotation.z = Math.cos(angle) * -0.68;
+    limb.rotation.x = Math.sin(angle) * 0.68;
+    limb.castShadow = true;
+    tree.add(limb);
+    const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(0.46, 0), makeMaterial(palette[branch % palette.length]));
+    crown.scale.set(1.1, 0.72, 1);
+    crown.position.set(Math.cos(angle) * 1.08, 3, Math.sin(angle) * 1.08);
+    crown.castShadow = true;
+    tree.add(crown);
+  }
+  parent.add(tree);
+}
+
+function addPalm(parent: THREE.Group, x: number, z: number, scale: number, palette: string[], seed: number) {
+  const palm = new THREE.Group();
+  palm.position.set(x, 0.1, z);
+  palm.scale.setScalar(scale);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.22, 2.9, 5), makeMaterial("#866142"));
+  trunk.position.y = 1.42;
+  trunk.rotation.z = (seed % 2 ? 1 : -1) * 0.08;
+  trunk.castShadow = true;
+  palm.add(trunk);
+  for (let leaf = 0; leaf < 7; leaf++) {
+    const angle = leaf * Math.PI * 2 / 7;
+    const frond = new THREE.Mesh(
+      new THREE.ConeGeometry(0.28, 2, 4),
+      makeMaterial(palette[leaf % palette.length]),
+    );
+    frond.position.set(Math.cos(angle) * 0.7, 2.94 - (leaf % 3) * 0.12, Math.sin(angle) * 0.7);
+    frond.rotation.z = -Math.cos(angle) * 0.95;
+    frond.rotation.x = Math.sin(angle) * 0.95;
+    frond.castShadow = true;
+    palm.add(frond);
+  }
+  parent.add(palm);
+}
+
+function addStoneRuin(parent: THREE.Group, x: number, z: number, scale: number, seed: number) {
+  const ruin = new THREE.Group();
+  ruin.position.set(x, 0.1, z);
+  ruin.rotation.y = seed * 0.73;
+  const sandstone = makeMaterial(seed % 2 ? "#a77a55" : "#bd9168");
+  const pillarHeight = 1.4 + (seed % 3) * 0.34;
+  const pillar = new THREE.Mesh(
+    new THREE.BoxGeometry(0.62 * scale, pillarHeight * scale, 0.6 * scale),
+    sandstone,
+  );
+  pillar.position.y = pillarHeight * scale / 2;
+  pillar.castShadow = true;
+  ruin.add(pillar);
+  const cap = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9 * scale, 0.25 * scale, 0.82 * scale),
+    makeMaterial("#c39a6f"),
+  );
+  cap.position.y = pillarHeight * scale;
+  cap.castShadow = true;
+  ruin.add(cap);
+  const carving = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06 * scale, 0.52 * scale, 0.035 * scale),
+    makeMaterial("#785843"),
+  );
+  carving.position.set(0, pillarHeight * scale * 0.53, 0.31 * scale);
+  ruin.add(carving);
+  parent.add(ruin);
+}
+
+function buildForest(parent: THREE.Group, biome: EnvironmentBiome) {
+  const foliage = biome.foliage;
+  const count = biome.name === "Tropical Forest" ? 30 : biome.name === "Sandstone Ruins" ? 12 : 20;
+  for (let i = 0; i < count; i++) {
+    const angle = (i * 2.399963) % (Math.PI * 2);
+    const radius = (biome.name === "Tropical Forest" ? 7.2 : 8.1) + (i % 5) * 0.62;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius * 0.72;
+    const scale = 0.78 + (i % 4) * 0.13;
+    if (biome.name === "Baobab Woodland") addBaobab(parent, x, z, scale, foliage, i);
+    else if (biome.name === "Tropical Forest") addPalm(parent, x, z, scale, foliage, i);
+    else addAcacia(parent, x, z, scale, foliage, i);
+  }
+  const scrubCount = biome.name === "Tropical Forest" ? 25 : biome.name === "Sandstone Ruins" ? 13 : 20;
+  for (let i = 0; i < scrubCount; i++) {
+    const angle = i * 2.399963 + 0.24;
+    const radius = 4.9 + (i % 5) * 0.43;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius * 0.7;
+    if (biome.name === "Sandstone Ruins" && i % 2 === 0) {
+      addStoneRuin(parent, x, z, 0.76 + (i % 3) * 0.12, i);
+    } else {
+      addHedge(parent, x, z, 0.56 + (i % 3) * 0.1, i % 2 ? biome.scrub : foliage[i % foliage.length]);
+    }
+  }
+  if (biome.name === "Sahel Stone Trail") {
+    for (let i = 0; i < 14; i++) {
+      const angle = i * 2.399963 + 0.58;
+      const radius = 7.4 + (i % 4) * 0.67;
+      const rock = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.56 + (i % 3) * 0.14, 0),
+        makeMaterial(i % 2 ? "#9e7955" : "#b18a5e"),
+      );
+      rock.scale.set(1.28, 0.8, 1);
+      rock.position.set(Math.cos(angle) * radius, 0.36, Math.sin(angle) * radius * 0.7);
+      rock.castShadow = true;
+      parent.add(rock);
+    }
+  }
+}
+
+function buildEnvironment(parent: THREE.Group, biome: EnvironmentBiome) {
+  const island = new THREE.Mesh(
+    new THREE.CylinderGeometry(11, 12.2, 1.15, 10, 1),
+    makeMaterial(biome.island),
+  );
+  island.position.y = -0.48;
+  island.receiveShadow = true;
+  island.castShadow = true;
+  parent.add(island);
+  const soilBand = new THREE.Mesh(
+    new THREE.CylinderGeometry(11.5, 12.2, 0.22, 10, 1, true),
+    makeMaterial(biome.soil),
+  );
+  soilBand.position.y = -0.27;
+  parent.add(soilBand);
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(11, 10), makeMaterial(biome.grass));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = 0.105;
+  ground.receiveShadow = true;
+  parent.add(ground);
+  const clearing = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.03, 2.25, 0.14, 9),
+    makeMaterial(biome.center),
+  );
+  clearing.position.y = 0.17;
+  clearing.receiveShadow = true;
+  parent.add(clearing);
+  buildForest(parent, biome);
+}
+
+function buildPath(scene: THREE.Group, direction: Direction, open: boolean, biome: EnvironmentBiome) {
   const arm = new THREE.Group();
   const vector = directionPoint(direction, 1);
   const lane = new THREE.Mesh(
     new THREE.BoxGeometry(2.45, 0.1, 8.9),
-    makeMaterial("#d6c392"),
+    makeMaterial(biome.path),
   );
   lane.position.set(vector.x * 4.45, 0.19, vector.z * 4.45);
   if (direction === "east" || direction === "west") lane.rotation.y = Math.PI / 2;
@@ -189,7 +407,7 @@ function buildPath(scene: THREE.Group, direction: Direction, open: boolean) {
   arm.add(lane);
   const centerLine = new THREE.Mesh(
     new THREE.BoxGeometry(0.055, 0.012, 6.7),
-    makeMaterial("#f0dfb4"),
+    makeMaterial(biome.pathLine),
   );
   centerLine.position.set(vector.x * 4.35, 0.25, vector.z * 4.35);
   if (direction === "east" || direction === "west") centerLine.rotation.y = Math.PI / 2;
@@ -202,7 +420,7 @@ function buildPath(scene: THREE.Group, direction: Direction, open: boolean) {
       const x = direction === "east" || direction === "west" ? vector.x * distance : sideOffset;
       const z = direction === "north" || direction === "south" ? vector.z * distance : sideOffset;
       if (open && distance > 6.7) continue;
-      const bushMaterial = makeMaterial(segment % 2 ? "#48684d" : "#5d7952");
+      const bushMaterial = makeMaterial(segment % 2 ? biome.scrub : biome.foliage[segment % biome.foliage.length]);
       const bush = new THREE.Mesh(new THREE.DodecahedronGeometry(0.53, 0), bushMaterial);
       bush.scale.set(1.16, 0.85 + (segment % 2) * 0.1, 0.95);
       bush.position.set(x, 0.52, z);
@@ -213,7 +431,7 @@ function buildPath(scene: THREE.Group, direction: Direction, open: boolean) {
   if (!open) {
     const barrier = new THREE.Mesh(
       new THREE.BoxGeometry(2.05, 0.62, 0.35),
-      makeMaterial("#526c4e"),
+      makeMaterial(biome.scrub),
     );
     barrier.position.set(vector.x * 7.7, 0.52, vector.z * 7.7);
     barrier.castShadow = true;
@@ -222,31 +440,190 @@ function buildPath(scene: THREE.Group, direction: Direction, open: boolean) {
   scene.add(arm);
 }
 
-function buildExplorer(scene: THREE.Scene, avatar: string, frame: string) {
+function makeChestTypeTexture(kind: ChestDrop["kind"]): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const context = canvas.getContext("2d");
+  if (!context) return new THREE.CanvasTexture(canvas);
+
+  context.fillStyle = "#fff8e8";
+  context.beginPath();
+  context.arc(64, 64, 57, 0, Math.PI * 2);
+  context.fill();
+  context.strokeStyle = kind === "coins" ? "#e3b956" : "#b996d5";
+  context.lineWidth = 8;
+  context.stroke();
+  if (kind === "coins") {
+    context.fillStyle = "#e4b74f";
+    context.beginPath();
+    context.arc(64, 64, 39, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = "#f8e4a6";
+    context.lineWidth = 3;
+    context.stroke();
+    context.fillStyle = "#fff8e8";
+    context.font = "700 58px Georgia";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText("$", 64, 66);
+  } else {
+    context.fillStyle = "#80629f";
+    context.beginPath();
+    context.arc(64, 43, 19, 0, Math.PI * 2);
+    context.fill();
+    context.beginPath();
+    context.ellipse(64, 95, 34, 27, 0, Math.PI, Math.PI * 2);
+    context.fill();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function buildChest(
+  parent: THREE.Group,
+  poolGroup: THREE.Group,
+  pool: THREE.Group[],
+  direction: Direction,
+  drop: ChestDrop,
+  iconTextures: Record<ChestDrop["kind"], THREE.CanvasTexture>,
+) {
+  const chest = pool.pop() ?? new THREE.Group();
+  poolGroup.remove(chest);
+  const pooled = chest.userData.hasChestModel === true;
+  if (!pooled) {
+    const model = new THREE.Group();
+    model.scale.setScalar(0.5);
+    const wood = new THREE.MeshStandardMaterial({ color: "#80532f", roughness: 0.72, flatShading: true });
+    const lidWood = new THREE.MeshStandardMaterial({ color: "#a36e3c", roughness: 0.65, flatShading: true });
+    const metal = rarityGlow(drop.color);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.54, 0.62), wood);
+    body.position.y = 0.32;
+    body.castShadow = true;
+    model.add(body);
+    const lid = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.25, 0.66), lidWood);
+    lid.position.y = 0.69;
+    lid.castShadow = true;
+    model.add(lid);
+    const band = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.79, 0.69), metal);
+    band.position.set(0, 0.49, 0);
+    band.castShadow = true;
+    model.add(band);
+    const clasp = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.2, 0.07), metal);
+    clasp.position.set(0, 0.39, 0.35);
+    model.add(clasp);
+    const auraMaterial = new THREE.MeshBasicMaterial({ color: drop.color, transparent: true, opacity: 0.72 });
+    const aura = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.035, 5, 16), auraMaterial);
+    aura.rotation.x = Math.PI / 2;
+    aura.position.y = 0.08;
+    model.add(aura);
+    chest.add(model);
+    const icon = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: iconTextures[drop.kind],
+      transparent: true,
+      depthWrite: false,
+    }));
+    icon.position.y = 1.13;
+    icon.scale.set(0.56, 0.56, 1);
+    icon.renderOrder = 2;
+    icon.material.userData.sharedChestIcon = true;
+    chest.add(icon);
+    chest.userData.metalMaterial = metal;
+    chest.userData.auraMaterial = auraMaterial;
+    chest.userData.iconMaterial = icon.material;
+    chest.userData.hasChestModel = true;
+  } else {
+    const metal = chest.userData.metalMaterial as THREE.MeshStandardMaterial;
+    metal.color.set(drop.color);
+    metal.emissive.set(drop.color);
+    const aura = chest.userData.auraMaterial as THREE.MeshBasicMaterial;
+    aura.color.set(drop.color);
+    const icon = chest.userData.iconMaterial as THREE.SpriteMaterial;
+    icon.map = iconTextures[drop.kind];
+    icon.needsUpdate = true;
+  }
+  chest.userData.direction = direction;
+  chest.userData.animationPhase = directions.indexOf(direction) * 1.3;
+  const point = directionPoint(direction, 1.95);
+  chest.position.set(point.x, 0.22, point.z);
+  chest.visible = true;
+  parent.add(chest);
+}
+
+function recycleChest(chest: THREE.Group, active: THREE.Group, poolGroup: THREE.Group, pool: THREE.Group[]) {
+  active.remove(chest);
+  chest.visible = false;
+  poolGroup.add(chest);
+  pool.push(chest);
+}
+
+function buildExplorer(scene: THREE.Scene, avatar: string, frame: string, characterId: string) {
+  const character = explorerById.get(characterId) ?? starterCharacters[0];
   const explorer = new THREE.Group();
-  const bodyMaterial = makeMaterial("#bf865b");
-  const cloakMaterial = makeMaterial("#547a63");
-  const skinMaterial = makeMaterial("#e4ba8c");
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.38, 0.78, 6), cloakMaterial);
+  const bodyMaterial = makeMaterial(character.trim);
+  const cloakMaterial = makeMaterial(character.cloak);
+  const skinMaterial = makeMaterial(character.skin);
+  const bodyGeometry = character.variant % 4 === 0
+    ? new THREE.CylinderGeometry(0.25, 0.38, 0.78, 6)
+    : character.variant % 4 === 1
+      ? new THREE.ConeGeometry(0.42, 0.92, 6)
+      : character.variant % 4 === 2
+        ? new THREE.DodecahedronGeometry(0.47, 0)
+        : new THREE.CylinderGeometry(0.4, 0.29, 0.74, 5);
+  const body = new THREE.Mesh(bodyGeometry, cloakMaterial);
   body.position.y = 0.75;
   body.castShadow = true;
   explorer.add(body);
-  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.32, 1), skinMaterial);
+  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.29 + (character.variant % 4) * 0.025, 1), skinMaterial);
   head.position.y = 1.34;
   head.castShadow = true;
   explorer.add(head);
-  const hat = new THREE.Mesh(new THREE.ConeGeometry(0.37, 0.56, 5), bodyMaterial);
-  hat.position.y = 1.73;
-  hat.rotation.y = -0.24;
-  hat.castShadow = true;
-  explorer.add(hat);
-  const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.075, 8), bodyMaterial);
-  brim.position.y = 1.51;
-  explorer.add(brim);
-  const pack = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.43, 0.24), makeMaterial("#9b7149"));
-  pack.position.set(0, 0.91, 0.34);
-  pack.castShadow = true;
-  explorer.add(pack);
+  if (character.species === 3) {
+    const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.48, 8, 6), new THREE.MeshStandardMaterial({
+      color: character.trim, transparent: true, opacity: 0.45, roughness: 0.25, flatShading: true,
+    }));
+    helmet.position.y = 1.35;
+    explorer.add(helmet);
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.08), makeMaterial("#a9e4ee", 0.3));
+    visor.position.set(0, 1.35, -0.43);
+    explorer.add(visor);
+  } else if (character.species === 2 || character.species === 5) {
+    for (const side of [-1, 1]) {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.18, character.species === 2 ? 0.55 : 0.34, 5), bodyMaterial);
+      ear.position.set(side * 0.22, 1.69, 0);
+      ear.rotation.z = side * -0.2;
+      ear.castShadow = true;
+      explorer.add(ear);
+    }
+  } else if (character.species === 1 || character.species === 4) {
+    for (const side of [-1, 1]) {
+      const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.42, 4), bodyMaterial);
+      leaf.position.set(side * 0.26, 1.69, 0.02);
+      leaf.rotation.z = side * -0.42;
+      explorer.add(leaf);
+    }
+  } else {
+    const hat = new THREE.Mesh(new THREE.ConeGeometry(0.37, 0.56, 5), bodyMaterial);
+    hat.position.y = 1.73;
+    hat.rotation.y = -0.24;
+    hat.castShadow = true;
+    explorer.add(hat);
+    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.075, 8), bodyMaterial);
+    brim.position.y = 1.51;
+    explorer.add(brim);
+  }
+  const packColor = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.46, 0.27), makeMaterial(character.cloak));
+  packColor.position.set(0, 0.91, 0.34);
+  packColor.castShadow = true;
+  explorer.add(packColor);
+  const sash = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.1 + (character.variant % 3) * 0.035, 0.43),
+    bodyMaterial,
+  );
+  sash.position.y = 0.83;
+  sash.rotation.z = character.variant % 2 ? 0.2 : -0.2;
+  explorer.add(sash);
   const footMaterial = makeMaterial("#46392d");
   for (const side of [-1, 1]) {
     const foot = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, 0.3), footMaterial);
@@ -413,7 +790,9 @@ export default function ThreeMazeScene({
   previous,
   bets,
   avatar,
+  characterId,
   onPathHoldStart,
+  onChestReached,
   theme,
   frame,
   trail,
@@ -424,10 +803,10 @@ export default function ThreeMazeScene({
   const routeIndicatorElementsRef = useRef<Partial<Record<Direction, HTMLSpanElement>>>({});
   const assetsRef = useRef<SceneAssets | null>(null);
   const holdStartRef = useRef(onPathHoldStart);
-  const propsRef = useRef({ junction, explorerPosition, phase, previous, bets, avatar, theme, frame, worldClockStartedAt, worldPhase });
+  const propsRef = useRef({ junction, explorerPosition, phase, previous, bets, avatar, characterId, onChestReached, theme, frame, worldClockStartedAt, worldPhase });
   const [graphicsError, setGraphicsError] = useState(false);
   holdStartRef.current = onPathHoldStart;
-  propsRef.current = { junction, explorerPosition, phase, previous, bets, avatar, theme, frame, worldClockStartedAt, worldPhase };
+  propsRef.current = { junction, explorerPosition, phase, previous, bets, avatar, characterId, onChestReached, theme, frame, worldClockStartedAt, worldPhase };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -451,7 +830,8 @@ export default function ThreeMazeScene({
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(propsRef.current.theme === "moonlit-maze" ? "#779098" : "#b9d4ca");
+    const initialBiome = environmentForRoom(propsRef.current.junction.id + 1);
+    scene.background = new THREE.Color(propsRef.current.theme === "moonlit-maze" ? initialBiome.skyNight : initialBiome.skyDay);
     scene.fog = new THREE.Fog(scene.background, 22, 43);
     const camera = new THREE.OrthographicCamera(-11, 11, 7.6, -7.6, 0.1, 100);
     camera.position.set(0, 17, 20);
@@ -469,47 +849,31 @@ export default function ThreeMazeScene({
     sun.shadow.bias = -0.00015;
     scene.add(sun);
 
-    const island = new THREE.Mesh(
-      new THREE.CylinderGeometry(11, 12.2, 1.15, 10, 1),
-      makeMaterial(propsRef.current.theme === "moonlit-maze" ? "#364e48" : "#78936a"),
-    );
-    island.position.y = -0.48;
-    island.receiveShadow = true;
-    island.castShadow = true;
-    scene.add(island);
-    const soilBand = new THREE.Mesh(
-      new THREE.CylinderGeometry(11.5, 12.2, 0.22, 10, 1, true),
-      makeMaterial("#795d42"),
-    );
-    soilBand.position.y = -0.27;
-    scene.add(soilBand);
-    const grass = new THREE.Mesh(
-      new THREE.CircleGeometry(11, 10),
-      makeMaterial(propsRef.current.theme === "moonlit-maze" ? "#526d59" : "#8ca272"),
-    );
-    grass.rotation.x = -Math.PI / 2;
-    grass.position.y = 0.105;
-    grass.receiveShadow = true;
-    scene.add(grass);
-    buildForest(scene, propsRef.current.theme === "moonlit-maze");
-
-    const center = new THREE.Mesh(
-      new THREE.CylinderGeometry(2.03, 2.25, 0.14, 9),
-      makeMaterial("#d9c79c"),
-    );
-    center.position.y = 0.17;
-    center.receiveShadow = true;
-    scene.add(center);
+    const environment = new THREE.Group();
+    environment.userData.biomeName = initialBiome.name;
+    scene.add(environment);
+    buildEnvironment(environment, initialBiome);
     const paths = new THREE.Group();
     scene.add(paths);
-    for (const direction of directions) buildPath(paths, direction, false);
+    for (const direction of directions) buildPath(paths, direction, false, initialBiome);
+    const chests = new THREE.Group();
+    scene.add(chests);
+    const chestPoolGroup = new THREE.Group();
+    chestPoolGroup.visible = false;
+    scene.add(chestPoolGroup);
+    const chestIconTextures = {
+      coins: makeChestTypeTexture("coins"),
+      character: makeChestTypeTexture("character"),
+    };
     const dynamic = new THREE.Group();
     scene.add(dynamic);
     const markerMeshes: THREE.Mesh[] = [];
-    const explorer = buildExplorer(scene, propsRef.current.avatar, propsRef.current.frame);
+    const explorer = buildExplorer(scene, propsRef.current.avatar, propsRef.current.frame, propsRef.current.characterId);
     const startingPoint = propsRef.current.phase === "moving"
       ? new THREE.Vector3()
-      : directionPoint("south", 3.05);
+      : propsRef.current.phase === "chest" && propsRef.current.previous
+        ? rotatedDirectionPoint(propsRef.current.previous, 1.95, orientationFor(propsRef.current.previous))
+        : directionPoint("south", 3.05);
     explorer.position.copy(startingPoint);
     explorer.position.y = 0.1;
     explorer.rotation.y = directionAngles.north;
@@ -566,12 +930,17 @@ export default function ThreeMazeScene({
 
     const assets: SceneAssets = {
       scene,
+      environment,
       camera,
       hemisphere,
       sun,
       renderer,
       dynamic,
       paths,
+      chests,
+      chestPoolGroup,
+      chestPool: [],
+      chestIconTextures,
       markerMeshes,
       fireflies,
       explorer,
@@ -581,6 +950,7 @@ export default function ThreeMazeScene({
       pointer,
       movement: null,
       suspenseStartedAt: null,
+      chestPickedUp: false,
       orientationAngle: orientationFor(propsRef.current.previous),
       routeIndicatorElements: routeIndicatorElementsRef.current,
     };
@@ -605,15 +975,31 @@ export default function ThreeMazeScene({
         const t = elapsed * speed + offset;
         mesh.position.set(Math.cos(t) * radius, 0.48 + Math.sin(t * 1.7) * 0.42 + (index % 3) * 0.14, Math.sin(t) * radius * 0.66);
       });
+      assets.chests.children.forEach((chest) => {
+        const phase = Number(chest.userData.animationPhase) || 0;
+        chest.position.y = 0.22 + Math.sin(elapsed * 1.8 + phase) * 0.08;
+        chest.rotation.y = elapsed * 0.45 + phase;
+      });
       const current = propsRef.current;
       const now = performance.now();
       const movement = assets.movement;
-      if (movement) {
+      if (movement && current.phase !== "chest") {
         const progress = Math.min(1, (now - movement.startedAt) / movement.duration);
         const eased = progress * progress * (3 - 2 * progress);
         assets.explorer.position.lerpVectors(movement.from, movement.to, eased);
         assets.explorer.position.y = 0.1 + Math.sin(progress * Math.PI) * 0.1;
         assets.explorer.rotation.y = movement.facing;
+        const chestOnPath = current.previous && current.junction.chests[current.previous];
+        if (chestOnPath && !assets.chestPickedUp && progress >= 0.6) {
+          assets.chestPickedUp = true;
+          const chest = assets.chests.children.find(
+            (entry) => entry.userData.direction === current.previous,
+          );
+          if (chest instanceof THREE.Group) {
+            recycleChest(chest, assets.chests, assets.chestPoolGroup, assets.chestPool);
+          }
+          current.onChestReached();
+        }
         if (progress >= 1) {
           assets.explorer.position.copy(movement.to);
           assets.explorer.position.y = 0.1;
@@ -623,7 +1009,7 @@ export default function ThreeMazeScene({
         assets.explorer.position.y = 0.08 + Math.sin(elapsed * 1.8) * 0.1;
       }
       const suspenseStartedAt = assets.suspenseStartedAt;
-      if (suspenseStartedAt !== null && (current.phase === "approaching" || current.phase === "moving")) {
+      if (suspenseStartedAt !== null && (current.phase === "approaching" || current.phase === "moving" || current.phase === "chest")) {
         const zoomProgress = Math.max(0, Math.min(1, (now - suspenseStartedAt - 2000) / 2400));
         const easedZoom = zoomProgress * zoomProgress * (3 - 2 * zoomProgress);
         camera.zoom += (1.32 - camera.zoom) * easedZoom * 0.06;
@@ -667,9 +1053,10 @@ export default function ThreeMazeScene({
         const blend = (clockTime - 630_000) / 30_000;
         nightBlend = 1 - blend * blend * (3 - 2 * blend);
       }
+      const biome = environmentForRoom(current.junction.id + 1);
       const moonlit = current.theme === "moonlit-maze";
-      daySky.set(moonlit ? "#718b95" : "#b9d4ca");
-      nightSky.set(moonlit ? "#101a2a" : "#253b4a");
+      daySky.set(moonlit ? biome.skyNight : biome.skyDay);
+      nightSky.set(moonlit ? "#101a2a" : biome.skyNight);
       skyColor.lerpColors(daySky, nightSky, nightBlend);
       assets.scene.background = skyColor;
       if (assets.scene.fog instanceof THREE.Fog) assets.scene.fog.color.copy(skyColor);
@@ -691,11 +1078,15 @@ export default function ThreeMazeScene({
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh || object instanceof THREE.Sprite) {
           object.geometry?.dispose();
+          if (object instanceof THREE.Sprite && !object.material.userData.sharedChestIcon) {
+            object.material.map?.dispose();
+          }
           const material = object.material;
           if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
           else material.dispose();
         }
       });
+      Object.values(assets.chestIconTextures).forEach((texture) => texture.dispose());
       assetsRef.current = null;
     };
   }, []);
@@ -704,6 +1095,21 @@ export default function ThreeMazeScene({
     const assets = assetsRef.current;
     if (!assets) return;
     const { junction: nextJunction } = propsRef.current;
+    const biome = environmentForRoom(nextJunction.id + 1);
+    if (assets.environment.userData.biomeName !== biome.name) {
+      while (assets.environment.children.length) {
+        const decoration = assets.environment.children[0];
+        assets.environment.remove(decoration);
+        decoration.traverse((object) => {
+          if (!(object instanceof THREE.Mesh)) return;
+          object.geometry.dispose();
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          materials.forEach((material) => material.dispose());
+        });
+      }
+      buildEnvironment(assets.environment, biome);
+      assets.environment.userData.biomeName = biome.name;
+    }
     while (assets.paths.children.length) {
       const path = assets.paths.children[0];
       assets.paths.remove(path);
@@ -720,10 +1126,31 @@ export default function ThreeMazeScene({
     assets.paths.rotation.y = assets.orientationAngle;
     assets.dynamic.rotation.y = assets.orientationAngle;
     for (const direction of directions) {
-      buildPath(assets.paths, direction, nextJunction.options.includes(direction) || direction === cameFrom);
+      buildPath(assets.paths, direction, nextJunction.options.includes(direction) || direction === cameFrom, biome);
     }
+    while (assets.chests.children.length) {
+      const chest = assets.chests.children[0];
+      recycleChest(chest as THREE.Group, assets.chests, assets.chestPoolGroup, assets.chestPool);
+    }
+    for (const [direction, chest] of Object.entries(nextJunction.chests)) {
+      if (!chest) continue;
+      if (propsRef.current.phase === "chest" && direction === propsRef.current.previous) continue;
+      buildChest(
+        assets.chests,
+        assets.chestPoolGroup,
+        assets.chestPool,
+        direction as Direction,
+        chest,
+        assets.chestIconTextures,
+      );
+    }
+    assets.chests.rotation.y = assets.orientationAngle;
+    const selectedChest = propsRef.current.previous;
+    assets.chests.children.forEach((chest) => {
+      chest.visible = !(propsRef.current.phase === "chest" && chest.userData.direction === selectedChest);
+    });
     buildMarkers(assets.dynamic, nextJunction, propsRef.current.bets, assets.markerMeshes);
-  }, [junction.id, junction.options, junction.hazards]);
+  }, [junction.id, junction.options, junction.hazards, junction.chests]);
 
   useEffect(() => {
     const assets = assetsRef.current;
@@ -733,9 +1160,18 @@ export default function ThreeMazeScene({
   useEffect(() => {
     const assets = assetsRef.current;
     if (!assets) return;
+    assets.chests.children.forEach((chest) => {
+      chest.visible = !(phase === "chest" && chest.userData.direction === previous);
+    });
+  }, [phase, previous, junction.id]);
+
+  useEffect(() => {
+    const assets = assetsRef.current;
+    if (!assets) return;
     const now = performance.now();
     if (phase === "approaching") {
       assets.suspenseStartedAt = now;
+      assets.chestPickedUp = false;
       assets.movement = {
         from: assets.explorer.position.clone(),
         to: new THREE.Vector3(0, 0, 0),
@@ -769,10 +1205,11 @@ export default function ThreeMazeScene({
   useEffect(() => {
     const assets = assetsRef.current;
     if (!assets) return;
-    const isNight = theme === "moonlit-maze";
-    assets.scene.background = new THREE.Color(isNight ? "#172b30" : "#b9d4ca");
-    if (assets.scene.fog instanceof THREE.Fog) assets.scene.fog.color.set(isNight ? "#172b30" : "#b9d4ca");
-  }, [theme]);
+    const biome = environmentForRoom(junction.id + 1);
+    const sky = theme === "moonlit-maze" ? biome.skyNight : biome.skyDay;
+    assets.scene.background = new THREE.Color(sky);
+    if (assets.scene.fog instanceof THREE.Fog) assets.scene.fog.color.set(sky);
+  }, [junction.id, theme]);
 
   useEffect(() => {
     const assets = assetsRef.current;
@@ -790,7 +1227,7 @@ export default function ThreeMazeScene({
     if (!assets) return;
     const position = assets.explorer.position;
     const rotation = assets.explorer.rotation.y;
-    const replacement = buildExplorer(assets.scene, avatar, frame);
+    const replacement = buildExplorer(assets.scene, avatar, frame, characterId);
     replacement.position.copy(position);
     replacement.rotation.y = rotation;
     assets.scene.remove(assets.explorer);
@@ -805,7 +1242,7 @@ export default function ThreeMazeScene({
       }
     });
     assets.explorer = replacement;
-  }, [avatar, frame]);
+  }, [avatar, characterId, frame]);
 
   return (
     <div className={`maze-frame ${theme === "moonlit-maze" ? "maze-night" : ""}`}>

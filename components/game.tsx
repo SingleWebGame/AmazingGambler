@@ -3,7 +3,8 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
-import ThreeMazeScene from "./three-maze-scene";
+import ThreeMazeScene, { environmentForRoom } from "./three-maze-scene";
+import { loadSoundEnabled, playGameSound, setSoundEnabled as saveSoundEnabled, type GameSound } from "@/lib/audio";
 import {
   cosmeticDefinitions,
   createJunction,
@@ -12,7 +13,7 @@ import {
   emptyProgress,
   itemDefinitions,
   loadProgress,
-  rollChest,
+  rollPathChest,
   rollEvent,
   saveProgress,
   statDefinitions,
@@ -20,11 +21,20 @@ import {
   type Direction,
   type CosmeticCategory,
   type EventKind,
+  type ChestDrop,
   type Junction,
   type Progress,
 } from "@/lib/game";
+import {
+  characterById,
+  characterPortrait,
+  characters,
+  starterCharacters,
+  type CharacterDefinition,
+  type CharacterRarity,
+} from "@/lib/characters";
 
-type Phase = "walking" | "choosing" | "approaching" | "moving" | "result" | "idle";
+type Phase = "walking" | "choosing" | "approaching" | "moving" | "chest" | "result" | "idle";
 type TrailNode = { x: number; y: number; id: number; event?: EventKind; icon?: string };
 type BetMap = Record<Direction, number>;
 type TurnReport = {
@@ -38,6 +48,7 @@ type TurnReport = {
   chestReward: number;
   fortuneBonus: number;
   chestName?: string;
+  chestDrop?: ChestDrop;
   itemName?: string;
   itemLuckGain: number;
   trapName?: string;
@@ -94,6 +105,60 @@ const isDirection = (value: unknown): value is Direction =>
   value === "north" || value === "east" || value === "south" || value === "west";
 const isEventKind = (value: unknown): value is EventKind =>
   value === "chest" || value === "item" || value === "trap" || value === "quiet";
+const OWNED_CHARACTERS_KEY = "amazing-gambler-owned-characters";
+const legacyStarterIds: Record<string, string> = { Pip: "pip", Moss: "moss", Ruby: "ruby", Orbit: "orbit" };
+const validCharacterRarities: CharacterRarity[] = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Ultra-rare"];
+const readOwnedCharacterIds = (): string[] => {
+  try {
+    const stored: unknown = JSON.parse(window.localStorage.getItem(OWNED_CHARACTERS_KEY) ?? "[\"pip\"]");
+    if (!Array.isArray(stored)) throw new Error("Saved character collection is not a list.");
+    const ids = stored.filter((id): id is string => typeof id === "string" && characterById.has(id));
+    return [...new Set(["pip", ...ids])];
+  } catch (error) {
+    console.error("Unable to load your character collection.", error);
+    return ["pip"];
+  }
+};
+const isChestDrop = (value: unknown): value is ChestDrop => {
+  if (!isRecord(value) || typeof value.color !== "string" || typeof value.label !== "string") return false;
+  if (value.kind === "coins") {
+    return typeof value.reward === "number" && Number.isFinite(value.reward) &&
+      ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic"].includes(String(value.rarity));
+  }
+  return value.kind === "character" && value.reward === 0 &&
+    typeof value.characterId === "string" && characterById.has(value.characterId) &&
+    validCharacterRarities.includes(value.rarity as CharacterRarity);
+};
+
+function createJunctionWithChests(id: number, cameFrom?: Direction, ownedIds: string[] = ["pip"]): Junction {
+  const junction = createJunction(id, cameFrom);
+  const chests: Partial<Record<Direction, ChestDrop>> = {};
+  if (id < 3) {
+    const character = starterCharacters.slice(1).find((entry) => !ownedIds.includes(entry.id));
+    for (const direction of junction.options) {
+      chests[direction] = character
+        ? {
+            kind: "character",
+            rarity: character.rarity,
+            reward: 0,
+            color: character.rarity === "Common" ? "#c9afe6" : character.rarity === "Rare" ? "#ae84df" : "#a475df",
+            label: `${character.rarity} character chest`,
+            characterId: character.id,
+          }
+        : { kind: "coins", rarity: "Rare", reward: 100, color: "#f4c464", label: "Welcome coin chest" };
+    }
+  } else if (id === 3) {
+    for (const direction of junction.options) {
+      chests[direction] = { kind: "coins", rarity: "Rare", reward: 100, color: "#f4c464", label: "Welcome coin chest" };
+    }
+  } else {
+    for (const direction of junction.options) {
+      const drop = rollPathChest(ownedIds, characters);
+      if (drop) chests[direction] = drop;
+    }
+  }
+  return { ...junction, hazards: id < 4 ? [] : junction.hazards, chests };
+}
 
 function loadForeverSession(): Partial<GameState> | null {
   try {
@@ -110,6 +175,13 @@ function loadForeverSession(): Partial<GameState> | null {
     const junctionId = isRecord(value.junction) && Number.isFinite(value.junction.id)
       ? Number(value.junction.id)
       : 0;
+    const savedChests = isRecord(value.junction) && isRecord(value.junction.chests)
+      ? Object.fromEntries(
+          Object.entries(value.junction.chests).filter(
+            (entry): entry is [Direction, ChestDrop] => isDirection(entry[0]) && isChestDrop(entry[1]),
+          ),
+        ) as Partial<Record<Direction, ChestDrop>>
+      : null;
     if (!options.length || !isRecord(value.bets) || !isRecord(value.stats) || !isRecord(value.explorer)) {
       throw new Error("Saved adventure is missing required game state.");
     }
@@ -141,6 +213,7 @@ function loadForeverSession(): Partial<GameState> | null {
           placedBets[direction] = Number(reportValue.placedBets[direction]);
         }
       }
+      const chestDrop = isChestDrop(reportValue.chestDrop) ? reportValue.chestDrop : undefined;
       lastReport = {
         room: Number(reportValue.room),
         actualDirection: reportValue.actualDirection,
@@ -151,7 +224,10 @@ function loadForeverSession(): Partial<GameState> | null {
         pathReward: Number(reportValue.pathReward),
         chestReward: Number(reportValue.chestReward),
         fortuneBonus: Number(reportValue.fortuneBonus),
-        chestName: typeof reportValue.chestName === "string" ? reportValue.chestName : undefined,
+        chestName: chestDrop?.kind === "character"
+          ? characterById.get(chestDrop.characterId)?.name
+          : typeof reportValue.chestName === "string" ? reportValue.chestName : undefined,
+        chestDrop,
         itemName: typeof reportValue.itemName === "string" ? reportValue.itemName : undefined,
         itemLuckGain: Number(reportValue.itemLuckGain),
         trapName: typeof reportValue.trapName === "string" ? reportValue.trapName : undefined,
@@ -169,10 +245,17 @@ function loadForeverSession(): Partial<GameState> | null {
       stats,
       phase: value.phase === "result" && lastReport
         ? "result"
+        : value.phase === "chest" && lastReport?.chestDrop
+          ? "chest"
         : value.phase === "walking" || value.phase === "approaching" || value.phase === "moving"
           ? value.phase
           : "choosing",
-      junction: { id: junctionId, options, hazards },
+      junction: {
+        id: junctionId,
+        options,
+        hazards,
+        chests: savedChests ?? createJunctionWithChests(junctionId, isDirection(value.previous) ? value.previous : undefined, readOwnedCharacterIds()).chests,
+      },
       previous: isDirection(value.previous) ? value.previous : undefined,
       explorer: {
         x: Number.isFinite(value.explorer.x) ? Number(value.explorer.x) : 0,
@@ -208,7 +291,22 @@ const useGame = create<GameState>((set) => ({
   run: 0,
   stats: Object.fromEntries(statDefinitions.map((stat) => [stat.id, stat.initial])),
   phase: "choosing",
-  junction: { id: 0, options: ["north", "east", "south", "west"], hazards: [] },
+  junction: {
+    id: 0,
+    options: ["north", "east", "south", "west"],
+    hazards: [],
+    chests: Object.fromEntries(["north", "east", "south", "west"].map((direction) => [
+      direction,
+      {
+        kind: "character",
+        rarity: "Common",
+        reward: 0,
+        color: "#c9afe6",
+        label: "Common character chest",
+        characterId: "moss",
+      },
+    ])) as Partial<Record<Direction, ChestDrop>>,
+  },
   explorer: { x: 0, y: 0 },
   trail: [{ x: 0, y: 0, id: 0 }],
   bets: { north: 0, east: 0, south: 0, west: 0 },
@@ -222,22 +320,12 @@ const useGame = create<GameState>((set) => ({
   set: (values) => set(values),
 }));
 
-const characters = [
-  { name: "Pip", color: "#f0ae73", face: "🧙" },
-  { name: "Moss", color: "#9dbe8f", face: "🧝" },
-  { name: "Ruby", color: "#e79a91", face: "🦊" },
-  { name: "Orbit", color: "#93b9d2", face: "👩‍🚀" },
-];
-
 const reverseDirection: Record<Direction, Direction> = {
   north: "south",
   east: "west",
   south: "north",
   west: "east",
 };
-const avatarArt = (character: (typeof characters)[number]) =>
-  `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><circle cx="48" cy="48" r="45" fill="${character.color}" stroke="#24362f" stroke-width="4"/><text x="48" y="62" text-anchor="middle" font-size="48">${character.face}</text></svg>`)}`;
-
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   const paths: Record<string, React.ReactNode> = {
@@ -246,8 +334,16 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     upload: <><path d="M12 16V4m-4 4 4-4 4 4" /><path d="M4 16v4h16v-4" /></>,
     arrow: <><path d="M5 12h14m-6-6 6 6-6 6" /></>,
     treasure: <><path d="M4 10h16v10H4zM3 6h18v4H3z" /><path d="M12 6v14m-3-14c-3 0-3-4 0-4 2 0 3 4 3 4m3 0c3 0 3-4 0-4-2 0-3 4-3 4" /></>,
+    sound: <><path d="M11 5 6 9H3v6h3l5 4z" /><path d="M15 9a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12" /></>,
+    muted: <><path d="M11 5 6 9H3v6h3l5 4z" /><path d="m16 9 5 6m0-6-5 6" /></>,
   };
   return <svg {...common}>{paths[name]}</svg>;
+}
+
+function isGameSound(sound: string | null): sound is GameSound {
+  return sound !== null && [
+    "ui", "coin", "undo", "predict", "reward", "purchase", "continue", "chest", "success", "miss", "toggle",
+  ].includes(sound);
 }
 
 function LegacyMazeScene({
@@ -404,7 +500,9 @@ function LegacyMazeScene({
 function MazeScene({
   game,
   avatar,
+  characterId,
   onPathHoldStart,
+  onChestReached,
   theme,
   trail,
   frame,
@@ -413,7 +511,9 @@ function MazeScene({
 }: {
   game: GameState;
   avatar: string;
+  characterId: string;
   onPathHoldStart: (direction: Direction) => void;
+  onChestReached: () => void;
   theme: string;
   trail: string;
   frame: string;
@@ -428,7 +528,9 @@ function MazeScene({
       previous={game.previous}
       bets={game.bets}
       avatar={avatar}
+      characterId={characterId}
       onPathHoldStart={onPathHoldStart}
+      onChestReached={onChestReached}
       theme={theme}
       trail={trail}
       frame={frame}
@@ -443,24 +545,28 @@ function SelectionModal({
   onUpload,
   onClose,
   hasCharacter,
+  ownedCharacterIds,
 }: {
-  onSelect: (name: string, image: string) => void;
+  onSelect: (character: CharacterDefinition) => void;
   onUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onClose: () => void;
   hasCharacter: boolean;
+  ownedCharacterIds: string[];
 }) {
+  const unlocked = characters.filter((character) => ownedCharacterIds.includes(character.id));
   return (
     <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <motion.section className="character-modal" initial={{ y: 16, scale: .97 }} animate={{ y: 0, scale: 1 }} aria-labelledby="character-title">
         {hasCharacter && <button className="modal-close" onClick={onClose} aria-label="Close character picker">×</button>}
-        <span className="eyebrow">A NEW ADVENTURE BEGINS</span>
-        <h2 id="character-title">Who&apos;s taking the first step?</h2>
-        <p>Choose a familiar face, or bring your own lucky charm.</p>
+        <span className="eyebrow">{hasCharacter ? "YOUR EXPLORER COLLECTION" : "A NEW ADVENTURE BEGINS"}</span>
+        <h2 id="character-title">{hasCharacter ? "Choose your explorer" : "Who's taking the first step?"}</h2>
+        <p>{hasCharacter ? `${ownedCharacterIds.length} of 100 explorers unlocked. Find character chests or visit the collection.` : "Seynabou Gaye is ready for the road. New friends are waiting in rare character chests."}</p>
         <div className="character-options">
-          {characters.map((character) => (
-            <button key={character.name} className="character-choice" onClick={() => onSelect(character.name, avatarArt(character))}>
-              <img src={avatarArt(character)} alt="" />
+          {unlocked.map((character) => (
+            <button key={character.id} className="character-choice" onClick={() => onSelect(character)}>
+              <img src={characterPortrait(character)} alt="" />
               <span>{character.name}</span>
+              {hasCharacter && <small>{character.rarity}</small>}
             </button>
           ))}
         </div>
@@ -470,6 +576,59 @@ function SelectionModal({
           <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onUpload} />
         </label>
         <div className="modal-footnote">A face for the road. No account, no stakes—just play.</div>
+      </motion.section>
+    </motion.div>
+  );
+}
+
+function CharacterCollectionModal({
+  ownedIds,
+  selectedId,
+  money,
+  onBuy,
+  onEquip,
+  onClose,
+}: {
+  ownedIds: string[];
+  selectedId: string;
+  money: number;
+  onBuy: (character: CharacterDefinition) => void;
+  onEquip: (character: CharacterDefinition) => void;
+  onClose: () => void;
+}) {
+  return (
+    <motion.div className="modal-backdrop character-collection-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+      <motion.section className="character-collection-modal" initial={{ y: 18, scale: .98 }} animate={{ y: 0, scale: 1 }} onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="collection-title">
+        <header className="character-collection-header">
+          <button className="modal-close" onClick={onClose} aria-label="Close character collection">×</button>
+          <span className="eyebrow">100 EXPLORERS TO DISCOVER</span>
+          <h2 id="collection-title">The wanderer&apos;s gallery</h2>
+          <p>Find rare lilac character chests along the paths, or save your virtual coins to invite a new friend. Their look changes the 3D explorer, never the odds.</p>
+          <div className="character-collection-summary"><span>{ownedIds.length} / 100 collected</span><strong>${money.toLocaleString()} coins</strong></div>
+        </header>
+        <div className="character-collection-scroll" aria-label="Explorer collection" tabIndex={0}>
+          <div className="character-collection-grid">
+            {characters.map((character) => {
+              const owned = ownedIds.includes(character.id);
+              const selected = selectedId === character.id;
+              return (
+                <article className={`gallery-card rarity-${character.rarity.toLowerCase().replace("-", "")}`} key={character.id}>
+                  <img src={characterPortrait(character)} alt="" />
+                  <strong>{character.name}</strong>
+                  <span>{character.rarity}</span>
+                  <button
+                    data-sound={owned ? "reward" : "purchase"}
+                    className={selected ? "gallery-selected" : ""}
+                    disabled={selected || (!owned && money < character.price)}
+                    onClick={() => owned ? onEquip(character) : onBuy(character)}
+                  >
+                    {selected ? "Exploring" : owned ? "Equip" : `$${character.price.toLocaleString()}`}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        </div>
       </motion.section>
     </motion.div>
   );
@@ -491,13 +650,14 @@ function TutorialModal({ onClose }: { onClose: () => void }) {
         <h2 id="tutorial-title">How to play</h2>
         <p id="tutorial-description" className="tutorial-intro">Read the crossroads, predict the explorer&apos;s next move, and learn what every part of the maze does. This guide is always available from the ? button.</p>
         <ol className="tutorial-steps">
-          <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. A risky marker warns that the route may bring a trap.</p></div></li>
+          <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. A risky marker warns that the route may bring a trap. Your first four predictions are guaranteed wins while you meet the explorer crew.</p></div></li>
           <li><span>2</span><div><strong>Place your virtual coins</strong><p>Each tap adds 1 coin to a path; press and hold to add faster. Use Undo last coin to take back one. Your wager is split across the paths you chose.</p></div></li>
           <li><span>3</span><div><strong>Watch destiny unfold</strong><p>After you press Watch the turn, the explorer approaches, the camera zooms, then the random path is revealed. Correct predictions pay 2×, or 3× on a risky path. Read the turn report before continuing.</p></div></li>
-          <li><span>4</span><div><strong>Find luck and trouble</strong><p>Chests award virtual coins, lucky items raise Luck, and traps can cost coins and Luck. Luck influences the chance of special events.</p></div></li>
+          <li><span>4</span><div><strong>Find a chest on the path</strong><p>Each route can hide one chest, placed before your prediction. Coin chests hold 10–1,000 coins; rare violet character chests unlock collectible explorers. The first three chests introduce Moussa Kane, Aissatou Cisse, and Cheikh Thiam. Chest contents are revealed as soon as the explorer reaches them.</p></div></li>
           <li><span>5</span><div><strong>Your forever adventure</strong><p>Progress saves on this device and the maze keeps going. A daily pouch adds 100 free coins each new day; if you run out, wait for it to arrive.</p></div></li>
-          <li><span>6</span><div><strong>Personalize your maze</strong><p>The Curio cabinet sells cosmetic keepsakes using virtual coins. Buy an item, then equip it. Frames, trails, themes, icons, and badges are visual only.</p></div></li>
-          <li><span>7</span><div><strong>Day turns to night</strong><p>In-game day and night each last 5 minutes, with a gentle 30-second transition between them. It only changes the scenery—not luck, paths, or rewards.</p></div></li>
+          <li><span>6</span><div><strong>Collect 100 explorers</strong><p>Start as Seynabou Gaye, earn explorers from rare character chests, or browse the gallery and buy a new companion for 15,000–200,000 virtual coins. Every explorer has a unique Senegalese name, portrait, and their own low-poly 3D look.</p></div></li>
+          <li><span>7</span><div><strong>Find luck and trouble</strong><p>Lucky items raise Luck, and traps can cost coins and Luck. Luck influences the chance of special events.</p></div></li>
+          <li><span>8</span><div><strong>Day turns to night</strong><p>In-game day and night each last 5 minutes, with a gentle 30-second transition between them. It only changes the scenery—not luck, paths, or rewards.</p></div></li>
         </ol>
         <button className="tutorial-close-button" onClick={onClose}>Close guide &amp; keep exploring</button>
         <div className="modal-footnote">A cozy game with virtual coins only—never real-money gambling.</div>
@@ -580,15 +740,19 @@ function PwaInstallButton() {
 
 export default function Game() {
   const game = useGame();
-  const [avatar, setAvatar] = useState(avatarArt(characters[0]));
-  const [characterName, setCharacterName] = useState("Pip");
+  const [avatar, setAvatar] = useState(characterPortrait(starterCharacters[0]));
+  const [characterName, setCharacterName] = useState("Seynabou Gaye");
+  const [selectedCharacterId, setSelectedCharacterId] = useState("pip");
+  const [ownedCharacterIds, setOwnedCharacterIds] = useState<string[]>(["pip"]);
   const [hasPickedCharacter, setHasPickedCharacter] = useState(false);
   const [showPicker, setShowPicker] = useState(true);
+  const [characterCollectionOpen, setCharacterCollectionOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialSeen, setTutorialSeen] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
   const [turnResult, setTurnResult] = useState<TurnReport | null>(null);
   const [shopOpen, setShopOpen] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
   const [ownedCosmetics, setOwnedCosmetics] = useState<string[]>([]);
   const [equipped, setEquipped] = useState<Partial<Record<CosmeticCategory, string>>>({});
   const [toast, setToast] = useState("");
@@ -599,15 +763,43 @@ export default function Game() {
   const worldClockStartedAtRef = useRef<number | null>(null);
   const heldPathRef = useRef<{ direction: Direction; startedAt: number; timer: number } | null>(null);
   const lastPlacedDirectionRef = useRef<Direction | null>(null);
+  const chestRevealPausedRef = useRef(false);
   const addBetRef = useRef<(direction: Direction, amount?: number) => void>(() => {});
+
+  useEffect(() => {
+    setSoundEnabled(loadSoundEnabled());
+    const main = document.querySelector("main.immersive-game");
+    if (!main) return;
+    const handleInteractiveClick = (event: Event) => {
+      if (!(event.target instanceof Element)) return;
+      const target = event.target.closest("button, a, label, [role='button'], .modal-backdrop");
+      if (!target || !main.contains(target) || target.matches(":disabled, [aria-disabled='true'], [data-sound-toggle]")) return;
+      if (target.classList.contains("route-option")) return;
+      const requestedSound = target.getAttribute("data-sound");
+      playGameSound(isGameSound(requestedSound) ? requestedSound : "ui");
+    };
+    main.addEventListener("click", handleInteractiveClick, true);
+    return () => main.removeEventListener("click", handleInteractiveClick, true);
+  }, []);
+
+  const toggleSound = () => {
+    const nextEnabled = !soundEnabled;
+    if (soundEnabled) playGameSound("toggle");
+    saveSoundEnabled(nextEnabled);
+    setSoundEnabled(nextEnabled);
+    if (nextEnabled) playGameSound("toggle");
+  };
   const luck = game.stats.luck ?? 10;
   const selectedCount = Object.values(game.bets).filter((amount) => amount > 0).length;
   const totalBet = Object.values(game.bets).reduce((sum, amount) => sum + amount, 0);
-  const suspenseReport = (game.phase === "approaching" || game.phase === "moving") ? game.lastReport : null;
+  const suspenseReport = (game.phase === "approaching" || game.phase === "moving" || game.phase === "chest") ? game.lastReport : null;
   const displayMoney = suspenseReport?.balanceBefore ?? game.money;
   const displayLuck = suspenseReport?.luckBefore ?? luck;
   const displayRoom = suspenseReport?.room ?? game.run + 1;
   const displayChests = game.chestCount - (suspenseReport?.chestName ? 1 : 0);
+  const revealedCharacter = turnResult?.chestDrop?.kind === "character"
+    ? characterById.get(turnResult.chestDrop.characterId)
+    : undefined;
   const equippedIcon = cosmeticDefinitions.find((cosmetic) => cosmetic.id === equipped.icon)?.icon;
   const equippedBadge = cosmeticDefinitions.find((cosmetic) => cosmetic.id === equipped.badge);
   const currentOptions = game.junction.options;
@@ -618,6 +810,8 @@ export default function Game() {
   const avatarName = characterName;
 
   useEffect(() => {
+    const restoredOwnedIds = readOwnedCharacterIds();
+    setOwnedCharacterIds(restoredOwnedIds);
     const restored = loadForeverSession();
     const today = dayIndex();
     if (restored) {
@@ -638,10 +832,25 @@ export default function Game() {
         const characterValue: unknown = JSON.parse(characterRaw);
         if (isRecord(characterValue) && typeof characterValue.name === "string" &&
           typeof characterValue.avatar === "string" && characterValue.avatar.length < 7_000_000) {
-          setCharacterName(characterValue.name);
-          setAvatar(characterValue.avatar);
+          const legacyNameId = legacyStarterIds[characterValue.name];
+          const legacyCharacter = starterCharacters.find((character) => character.name === characterValue.name)
+            ?? starterCharacters.find((character) => character.id === legacyNameId);
+          const selectedId = typeof characterValue.id === "string" && characterById.has(characterValue.id)
+            ? characterValue.id
+            : legacyCharacter?.id ?? "custom";
+          const restoredCharacter = characterById.get(selectedId);
+          const nextOwned = selectedId !== "custom" && !restoredOwnedIds.includes(selectedId)
+            ? [...restoredOwnedIds, selectedId]
+            : restoredOwnedIds;
+          setOwnedCharacterIds(nextOwned);
+          setSelectedCharacterId(selectedId);
+          setCharacterName(restoredCharacter?.name ?? characterValue.name);
+          setAvatar(restoredCharacter ? characterPortrait(restoredCharacter) : characterValue.avatar);
           setHasPickedCharacter(true);
           setShowPicker(false);
+          if (nextOwned.length !== restoredOwnedIds.length) {
+            window.localStorage.setItem(OWNED_CHARACTERS_KEY, JSON.stringify(nextOwned));
+          }
         }
       }
     } catch (error) {
@@ -771,6 +980,7 @@ export default function Game() {
   }, []);
 
   useEffect(() => {
+    if (game.phase === "chest") chestRevealPausedRef.current = true;
     if (game.phase === "walking") {
       const timer = window.setTimeout(() => game.set({ phase: "choosing", message: "Choose a path. Trust your gut." }), 850);
       return () => window.clearTimeout(timer);
@@ -783,7 +993,8 @@ export default function Game() {
     }
     if (game.phase === "moving" && game.lastReport) {
       const timer = window.setTimeout(() => {
-        const junction = createJunction(game.run, game.previous);
+        const junction = createJunctionWithChests(game.run, game.previous, ownedCharacterIds);
+        playGameSound(game.lastReport?.hit ? "success" : "miss");
         game.set({
           phase: "result",
           junction,
@@ -793,7 +1004,7 @@ export default function Game() {
       }, 2300);
       return () => window.clearTimeout(timer);
     }
-  }, [game.phase, game.run, game.previous, game.lastReport, game]);
+  }, [game.phase, game.run, game.previous, game.lastReport, game, ownedCharacterIds]);
 
   useEffect(() => {
     const stopHolding = () => {
@@ -811,19 +1022,75 @@ export default function Game() {
     };
   }, []);
 
-  const chooseCharacter = (name: string, image: string) => {
-    setAvatar(image);
-    setCharacterName(name);
+  const chooseCharacter = (character: CharacterDefinition) => {
+    if (!ownedCharacterIds.includes(character.id)) return;
+    setAvatar(characterPortrait(character));
+    setCharacterName(character.name);
+    setSelectedCharacterId(character.id);
     setHasPickedCharacter(true);
     setShowPicker(false);
     try {
-      window.localStorage.setItem("amazing-gambler-forever-character", JSON.stringify({ name, avatar: image }));
+      window.localStorage.setItem("amazing-gambler-forever-character", JSON.stringify({
+        id: character.id,
+        name: character.name,
+        avatar: characterPortrait(character),
+      }));
     } catch (error) {
       console.error("Unable to save your explorer.", error);
       setToast("Your explorer could not be saved on this device.");
     }
     if (!tutorialSeen) setShowTutorial(true);
-    if (game.phase !== "result" && game.phase !== "approaching" && game.phase !== "moving") game.set({ phase: "walking" });
+    if (!["result", "approaching", "moving", "chest"].includes(game.phase)) game.set({ phase: "walking" });
+  };
+
+  const chooseCustomCharacter = (name: string, image: string) => {
+    setAvatar(image);
+    setCharacterName(name);
+    setSelectedCharacterId("custom");
+    setHasPickedCharacter(true);
+    setShowPicker(false);
+    try {
+      window.localStorage.setItem("amazing-gambler-forever-character", JSON.stringify({ id: "custom", name, avatar: image }));
+    } catch (error) {
+      console.error("Unable to save your explorer.", error);
+      setToast("Your explorer could not be saved on this device.");
+    }
+    if (!tutorialSeen) setShowTutorial(true);
+    if (!["result", "approaching", "moving", "chest"].includes(game.phase)) game.set({ phase: "walking" });
+  };
+
+  const buyCharacter = (character: CharacterDefinition) => {
+    if (ownedCharacterIds.includes(character.id)) return;
+    const spendable = Math.max(0, game.money - totalBet);
+    if (spendable < character.price || game.phase !== "choosing") {
+      setToast(game.phase !== "choosing"
+        ? "Wait for the turn to finish before inviting an explorer."
+        : `Save ${formatCoinBalance(character.price - spendable)} more unplaced coins to invite ${character.name}.`);
+      window.setTimeout(() => setToast(""), 3000);
+      return;
+    }
+    const nextOwned = [...ownedCharacterIds, character.id];
+    try {
+      window.localStorage.setItem(OWNED_CHARACTERS_KEY, JSON.stringify(nextOwned));
+      setOwnedCharacterIds(nextOwned);
+      game.set({ money: game.money - character.price });
+      setToast(`${character.name} joined your explorer collection.`);
+    } catch (error) {
+      console.error("Unable to save your character collection.", error);
+      setToast("The explorer could not be saved on this device.");
+    }
+  };
+
+  const continueAfterChest = () => {
+    chestRevealPausedRef.current = true;
+    game.set({ phase: "moving", message: "The explorer continues down the path." });
+  };
+
+  const handleChestReached = () => {
+    if (game.phase !== "moving" || chestRevealPausedRef.current) return;
+    chestRevealPausedRef.current = true;
+    playGameSound("chest");
+    game.set({ phase: "chest", message: "A chest! See what the explorer found." });
   };
 
   const closeTutorial = () => {
@@ -850,7 +1117,7 @@ export default function Game() {
       window.setTimeout(() => setToast(""), 2800);
     };
     reader.onload = () => {
-      if (typeof reader.result === "string") chooseCharacter("Your explorer", reader.result);
+      if (typeof reader.result === "string") chooseCustomCharacter("Your explorer", reader.result);
     };
     reader.readAsDataURL(file);
   };
@@ -876,6 +1143,7 @@ export default function Game() {
     const next = Math.min(game.money - (totalBet - current), current + Math.min(amount, available));
     lastPlacedDirectionRef.current = direction;
     const nextBets = { ...game.bets, [direction]: next };
+    playGameSound("coin");
     game.set({ bets: nextBets });
   };
 
@@ -923,12 +1191,20 @@ export default function Game() {
       return;
     }
     const options = game.junction.options;
-    const actualDirection = options[Math.floor(Math.random() * options.length)];
-    const hit = Object.entries(game.bets).some(([direction, amount]) => direction === actualDirection && amount > 0);
+    const guaranteedWin = game.run < 4;
+    const backedOptions = options.filter((direction) => game.bets[direction] > 0);
+    const actualDirection = guaranteedWin
+      ? backedOptions[Math.floor(Math.random() * backedOptions.length)]
+      : options[Math.floor(Math.random() * options.length)];
+    const hit = guaranteedWin || game.bets[actualDirection] > 0;
     const dangerous = game.junction.hazards.includes(actualDirection);
     const predictedTrap = hit && dangerous;
-    const event = rollEvent(luck);
-    const chest = event === "chest" ? rollChest(luck) : null;
+    const event = game.run < 4 ? "quiet" : rollEvent(luck);
+    const chestDrop = game.junction.chests[actualDirection] ?? null;
+    const chest = chestDrop?.kind === "coins" ? chestDrop : null;
+    const newCharacter = chestDrop?.kind === "character"
+      ? characterById.get(chestDrop.characterId)
+      : undefined;
     const item = event === "item" ? itemDefinitions[Math.floor(Math.random() * itemDefinitions.length)] : null;
     const trapEncounter = dangerous || event === "trap";
     const trap = trapEncounter
@@ -981,7 +1257,10 @@ export default function Game() {
       pathReward,
       chestReward: chest?.reward ?? 0,
       fortuneBonus,
-      chestName: chest?.label,
+      chestName: chestDrop
+        ? newCharacter?.name ?? (chest?.label ?? chestDrop.label)
+        : undefined,
+      chestDrop: chestDrop ?? undefined,
       itemName: item?.name,
       itemLuckGain,
       trapName: trap?.label,
@@ -1002,7 +1281,7 @@ export default function Game() {
       totalEarned: game.progress.totalEarned + Math.max(0, pathReward + (chest?.reward ?? 0) + fortuneBonus),
       highestLuck: Math.max(game.progress.highestLuck, oldLuck, nextLuck),
       longestRun: Math.max(game.progress.longestRun, nextRun),
-      chestsCollected: game.progress.chestsCollected + (chest ? 1 : 0),
+      chestsCollected: game.progress.chestsCollected + (chestDrop ? 1 : 0),
       correctPredictions: game.progress.correctPredictions + (hit ? 1 : 0),
       failedPredictions: game.progress.failedPredictions + (hit ? 0 : 1),
       trapPredictions: game.progress.trapPredictions + (predictedTrap ? 1 : 0),
@@ -1012,11 +1291,23 @@ export default function Game() {
       x: game.explorer.x + vector.x,
       y: game.explorer.y + vector.y,
       id: nextRun,
-      event: trapEncounter ? "trap" : event,
-      icon: trapEncounter ? trap?.icon : chest?.id,
+      event: trapEncounter ? "trap" : chestDrop ? "chest" : event,
+      icon: trapEncounter ? trap?.icon : newCharacter?.name ?? chest?.rarity,
     };
     const stepStats = { ...game.stats, luck: nextLuck };
     setTurnResult(report);
+    chestRevealPausedRef.current = false;
+    if (newCharacter && !ownedCharacterIds.includes(newCharacter.id)) {
+      const nextOwned = [...ownedCharacterIds, newCharacter.id];
+      try {
+        window.localStorage.setItem(OWNED_CHARACTERS_KEY, JSON.stringify(nextOwned));
+        setOwnedCharacterIds(nextOwned);
+      } catch (error) {
+        console.error("Unable to save your chest character reward.", error);
+        setOwnedCharacterIds(nextOwned);
+        setToast("Your explorer reward could not be saved on this device.");
+      }
+    }
     game.set({
       money: nextMoney,
       run: nextRun,
@@ -1026,9 +1317,9 @@ export default function Game() {
       trail: [...game.trail, node],
       progress: nextProgress,
       message: resultMessage,
-      event: trapEncounter ? "trap" : event,
+      event: trapEncounter ? "trap" : chestDrop ? "chest" : event,
       overflow: !overflowActivated && (overflowArmed || overflowReached),
-      chestCount: game.chestCount + (chest ? 1 : 0),
+      chestCount: game.chestCount + (chestDrop ? 1 : 0),
       lastReport: report,
     });
     saveProgress(nextProgress);
@@ -1157,7 +1448,9 @@ export default function Game() {
         <MazeScene
           game={game}
           avatar={avatar}
+          characterId={selectedCharacterId}
           onPathHoldStart={startPathHold}
+          onChestReached={handleChestReached}
           theme={equipped.theme ?? ""}
           trail={equipped.trail ?? ""}
           frame={equipped.frame ?? ""}
@@ -1183,16 +1476,27 @@ export default function Game() {
         </div>
       </header>
 
-      <div className="world-title"><span className="world-clover">{equippedIcon ?? "✳"}</span><span>AMAZING GAMBLER</span><span className="world-time">{worldPhase}</span></div>
+      <div className="world-title"><span className="world-clover">{equippedIcon ?? "✳"}</span><span>AMAZING GAMBLER</span><span className="world-biome">{environmentForRoom(game.junction.id + 1).name}</span><span className="world-time">{worldPhase}</span></div>
 
       <div className="world-shortcuts">
         <button className="profile-button glass-panel" onClick={() => setShowPicker(true)} aria-label={`Change explorer, current character ${avatarName}`}>
           <img src={avatar} alt="" /><span>{avatarName}</span><span className="profile-caret">⌄</span>
         </button>
         <button className="glass-tool" onClick={() => setShopOpen(true)}>✦ <span>Curio cabinet</span></button>
+        <button className="glass-tool character-gallery-button" onClick={() => setCharacterCollectionOpen(true)} aria-label="Open character collection">♙ <span>Explorers</span></button>
         <button className="glass-tool" onClick={() => setResultOpen(true)}>✧ <span>Journey card</span></button>
         <button className="glass-tool" onClick={() => setShowTutorial(true)} aria-label="Open game guide">? <span>Game guide</span></button>
         <PwaInstallButton />
+        <button
+          className="glass-tool sound-toggle"
+          data-sound-toggle
+          aria-label={soundEnabled ? "Turn sound effects off" : "Turn sound effects on"}
+          aria-pressed={soundEnabled}
+          onClick={toggleSound}
+        >
+          <Icon name={soundEnabled ? "sound" : "muted"} size={16} />
+          <span>{soundEnabled ? "Sound on" : "Sound off"}</span>
+        </button>
       </div>
 
       <section className="next-junction-panel glass-panel" aria-label="Choose the explorer's path">
@@ -1205,7 +1509,7 @@ export default function Game() {
           <div className="stake-summary">
             <span>ON THE LINE</span>
             <strong title={`${totalBet.toLocaleString()} coins`}><span className="mini-coin">$</span>{formatCoinBalance(totalBet)}</strong>
-            {totalBet > 0 && <button onClick={undoLastCoin} disabled={game.phase !== "choosing"} aria-label="Undo the last coin placed"><Icon name="undo" size={13} /><span>Undo last coin</span></button>}
+            {totalBet > 0 && <button data-sound="undo" onClick={undoLastCoin} disabled={game.phase !== "choosing"} aria-label="Undo the last coin placed"><Icon name="undo" size={13} /><span>Undo last coin</span></button>}
           </div>
         </div>
         <div className={`route-options options-${currentOptions.length}`}>
@@ -1247,7 +1551,7 @@ export default function Game() {
                       ? `${totalBet} virtual ${totalBet === 1 ? "coin" : "coins"} placed · no real money`
                       : "Your explorer is waiting for your hunch."}
           </span>
-          <button className="predict-button" onClick={resolveRound} disabled={game.phase !== "choosing" || !selectedCount || totalBet === 0 || totalBet > game.money || game.money <= 0}>
+          <button className="predict-button" data-sound="predict" onClick={resolveRound} disabled={game.phase !== "choosing" || !selectedCount || totalBet === 0 || totalBet > game.money || game.money <= 0}>
             <span>{game.money === 0 ? `Wait for daily coins · ${dailyCountdown || "…"}` : game.phase === "choosing" ? "Watch the turn" : game.phase === "approaching" ? "The moment of fate…" : game.phase === "moving" ? "The explorer is on the move…" : game.phase === "result" ? "Read your turn report" : "Explorer on the move…"}</span>
             {game.phase === "choosing" && game.money > 0 && <Icon name="arrow" size={19} />}
             {game.phase !== "choosing" && <span className="button-ellipsis">···</span>}
@@ -1257,8 +1561,34 @@ export default function Game() {
       </section>
 
       <AnimatePresence>
-        {showPicker && <SelectionModal onSelect={chooseCharacter} onUpload={uploadCharacter} onClose={() => { setShowPicker(false); if (game.phase === "choosing") game.set({ phase: "walking" }); }} hasCharacter={hasPickedCharacter} />}
+        {showPicker && <SelectionModal onSelect={chooseCharacter} onUpload={uploadCharacter} onClose={() => { setShowPicker(false); if (game.phase === "choosing") game.set({ phase: "walking" }); }} hasCharacter={hasPickedCharacter} ownedCharacterIds={ownedCharacterIds} />}
         {showTutorial && <TutorialModal onClose={closeTutorial} />}
+        {game.phase === "chest" && turnResult?.chestDrop && (
+          <motion.div className="turn-report-backdrop chest-reveal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.section className={`chest-reveal-card glass-panel ${turnResult.chestDrop.kind === "character" ? "chest-reveal-character" : "chest-reveal-coins"}`} role="dialog" aria-modal="true" aria-labelledby="chest-reveal-title" initial={{ y: 18, scale: .96 }} animate={{ y: 0, scale: 1 }}>
+              <span className="chest-reveal-kicker">FOUND ON THE {directionNames[turnResult.actualDirection].toUpperCase()} PATH · {turnResult.chestDrop.rarity.toUpperCase()}</span>
+              <div className="chest-reveal-art" style={{ "--chest-color": turnResult.chestDrop.color } as React.CSSProperties}>
+                {turnResult.chestDrop.kind === "character"
+                  ? <img src={characterPortrait(characterById.get(turnResult.chestDrop.characterId) ?? starterCharacters[0])} alt="" />
+                  : <Icon name="treasure" size={50} />}
+              </div>
+              <h2 id="chest-reveal-title">{turnResult.chestDrop.kind === "character"
+                ? characterById.get(turnResult.chestDrop.characterId)?.name ?? "A new explorer"
+                : `+${turnResult.chestDrop.reward} coins`}</h2>
+              <p>{turnResult.chestDrop.kind === "character"
+                ? "A new friend has joined your collection. Choose them now or keep exploring with your current companion."
+                : `${turnResult.chestDrop.rarity} treasure. The coins are yours, and the explorer can carry on.`}</p>
+              {revealedCharacter && (
+                <button className="chest-equip-button" data-sound="reward" onClick={() => chooseCharacter(revealedCharacter)}>
+                  Equip {revealedCharacter.name}
+                </button>
+              )}
+              <button className="turn-continue chest-continue" data-sound="continue" onClick={continueAfterChest}>
+                Continue the adventure <Icon name="arrow" size={18} />
+              </button>
+            </motion.section>
+          </motion.div>
+        )}
         {turnResult && game.phase === "result" && (
           <motion.div className="turn-report-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <motion.section className="turn-report glass-panel" role="dialog" aria-modal="true" aria-labelledby="turn-report-title" initial={{ y: 18, scale: .97 }} animate={{ y: 0, scale: 1 }} exit={{ y: 10, scale: .98 }}>
@@ -1277,6 +1607,7 @@ export default function Game() {
                 <div><span>Your coins placed</span><strong>−{turnResult.totalStake}</strong></div>
                 <div><span>{turnResult.hit ? `Correct path · ${turnResult.risky ? "risky 3×" : "2×"} payout` : "Path prediction"}</span><strong>{turnResult.pathReward ? `+${turnResult.pathReward}` : "—"}</strong></div>
                 {turnResult.chestReward > 0 && <div><span>{turnResult.chestName ?? "Treasure chest"}</span><strong>+{turnResult.chestReward}</strong></div>}
+                {turnResult.chestDrop?.kind === "character" && <div><span>New explorer · {turnResult.chestName}</span><strong>Unlocked</strong></div>}
                 {turnResult.fortuneBonus > 0 && <div><span>{turnResult.risky && turnResult.hit ? "Risky path bonus" : "Fortune bonus"}</span><strong>+{turnResult.fortuneBonus}</strong></div>}
                 {turnResult.itemName && <div><span>{turnResult.itemName}</span><strong>+{turnResult.itemLuckGain}% luck</strong></div>}
                 {turnResult.trapPenalty > 0 && <div className="turn-line-danger"><span>{turnResult.trapName ?? "Trap"}{turnResult.trapCaught ? " · caught!" : ""}</span><strong>−{turnResult.trapPenalty}</strong></div>}
@@ -1286,7 +1617,7 @@ export default function Game() {
               <div className={`turn-net ${netCoins < 0 ? "turn-net-loss" : ""}`}>
                 {netCoins >= 0 ? "+" : "−"}{Math.abs(netCoins)} <span>coins this turn</span>
               </div>
-              <button className="turn-continue" onClick={advanceAfterReport}>
+              <button className="turn-continue" data-sound="continue" onClick={advanceAfterReport}>
                 Continue to room {String(game.run + 1).padStart(2, "0")} <Icon name="arrow" size={18} />
               </button>
               <p className="turn-report-note">The maze keeps going. Your forever adventure is saved automatically.</p>
@@ -1330,7 +1661,12 @@ export default function Game() {
                     <article className="shop-item" key={cosmetic.id}>
                       <span className="shop-item-icon">{cosmetic.icon}</span>
                       <div className="shop-item-copy"><strong>{cosmetic.label}</strong><span>{cosmetic.description}</span></div>
-                      <button className={active ? "shop-item-active" : ""} onClick={() => collectCosmetic(cosmetic.id)} disabled={!isOwned && game.money < cosmetic.price}>
+                      <button
+                        data-sound={isOwned ? "reward" : "purchase"}
+                        className={active ? "shop-item-active" : ""}
+                        onClick={() => collectCosmetic(cosmetic.id)}
+                        disabled={!isOwned && game.money < cosmetic.price}
+                      >
                         {active ? "Wearing" : isOwned ? "Equip" : `$${cosmetic.price}`}
                       </button>
                     </article>
@@ -1340,6 +1676,19 @@ export default function Game() {
               <div className="shop-footnote">Golden halo decorates your explorer · Moonlit maze changes the scenery · Starlight trail changes the path effect · Lucky compass changes the title mark · Pathfinder badge adds a keepsake. Visuals only, no gameplay advantage.</div>
             </motion.section>
           </motion.div>
+        )}
+        {characterCollectionOpen && (
+          <CharacterCollectionModal
+            ownedIds={ownedCharacterIds}
+            selectedId={selectedCharacterId}
+            money={game.money}
+            onBuy={buyCharacter}
+            onEquip={(character) => {
+              chooseCharacter(character);
+              setCharacterCollectionOpen(false);
+            }}
+            onClose={() => setCharacterCollectionOpen(false)}
+          />
         )}
       </AnimatePresence>
       <AnimatePresence>{toast && <motion.div className="toast-message" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}>{toast}</motion.div>}</AnimatePresence>
