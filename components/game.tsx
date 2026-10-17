@@ -796,6 +796,7 @@ export default function Game() {
   const [turnResult, setTurnResult] = useState<TurnReport | null>(null);
   const [coinCountAnimation, setCoinCountAnimation] = useState<{ from: number; to: number } | null>(null);
   const [coinCountValue, setCoinCountValue] = useState<number | null>(null);
+  const [betLossCue, setBetLossCue] = useState<{ id: number; amount: number } | null>(null);
   const [shopOpen, setShopOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [ownedCosmetics, setOwnedCosmetics] = useState<string[]>([]);
@@ -810,6 +811,8 @@ export default function Game() {
   const lastPlacedDirectionRef = useRef<Direction | null>(null);
   const chestRevealPausedRef = useRef(false);
   const addBetRef = useRef<(direction: Direction, amount?: number) => void>(() => {});
+  const previousBetTotalRef = useRef<number | null>(null);
+  const betLossCueIdRef = useRef(0);
 
   useEffect(() => {
     if (!coinCountAnimation) return;
@@ -886,6 +889,14 @@ export default function Game() {
     return { direction, label: directionLabels[direction] };
   });
   const avatarName = characterName;
+
+  useEffect(() => {
+    if (!sessionReady) return;
+    const previousTotal = previousBetTotalRef.current;
+    previousBetTotalRef.current = totalBet;
+    if (previousTotal === null || totalBet <= previousTotal || game.phase !== "choosing") return;
+    setBetLossCue({ id: ++betLossCueIdRef.current, amount: totalBet - previousTotal });
+  }, [totalBet, sessionReady, game.phase]);
 
   useEffect(() => {
     const restoredOwnedIds = readOwnedCharacterIds();
@@ -1530,6 +1541,18 @@ export default function Game() {
           {game.overflow && <span className="hud-overflow">FORTUNE READY</span>}
         </div>
         <div className="hud-wallet glass-panel">
+          {betLossCue && (
+            <motion.span
+              key={betLossCue.id}
+              className="hud-coin-loss"
+              aria-hidden="true"
+              initial={{ opacity: 0, y: 5, scale: .9 }}
+              animate={{ opacity: [0, 1, 1, 0], y: [5, -5, -5, -25], scale: [.9, 1, 1, .96] }}
+              transition={{ duration: .95, times: [0, .18, .68, 1], ease: "easeOut" }}
+            >
+              −{formatCoinBalance(betLossCue.amount)}
+            </motion.span>
+          )}
           <div className="hud-coins"><span className="coin-single" aria-hidden="true">$</span><strong title={displayMoney.toLocaleString()}>{formatCoinBalance(displayMoney)}</strong></div>
           <div className="hud-chests"><Icon name="treasure" size={14} /><span>{displayChests} chests found</span></div>
           <div className={`hud-daily ${displayMoney === 0 ? "hud-daily-waiting" : ""}`}>{displayMoney === 0 ? `Daily pouch · +100 in ${dailyCountdown}` : `+100 daily · ${dailyCountdown}`}</div>

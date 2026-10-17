@@ -163,7 +163,7 @@ const directionPoint = (direction: Direction, distance: number) => {
 };
 const ENTRY_CHEST_DISTANCE = 4.05;
 const TRAP_DISTANCE = 7.3;
-const ROUTE_INDICATOR_DISTANCE = 3.6;
+const ROUTE_INDICATOR_DISTANCE = 6.25;
 const isEntryPathChest = (direction: Direction, previous?: Direction) =>
   direction === (previous ? reverseDirection[previous] : "south");
 const chestDistance = (direction: Direction, previous?: Direction) =>
@@ -1106,7 +1106,7 @@ export default function ThreeMazeScene({
           if (wager !== Number(previousWager)) indicator.dataset.betCount = String(wager);
         }
         indicatorPosition.copy(directionPoint(direction, ROUTE_INDICATOR_DISTANCE));
-        indicatorPosition.y = 0.65;
+        indicatorPosition.y = 1.17;
         assets.dynamic.localToWorld(indicatorPosition);
         indicatorPosition.project(camera);
         const horizontalMargin = 72;
