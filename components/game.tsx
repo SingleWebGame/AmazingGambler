@@ -7,11 +7,14 @@ import ThreeMazeScene, { environmentForRoom } from "./three-maze-scene";
 import { loadSoundEnabled, playGameSound, setSoundEnabled as saveSoundEnabled, type GameSound } from "@/lib/audio";
 import {
   cosmeticDefinitions,
+  choosePredictedPath,
   createJunction,
+  directionLabels,
   directionNames,
   directionVectors,
   emptyProgress,
   itemDefinitions,
+  luckInfluence,
   loadProgress,
   rollPathChest,
   rollEvent,
@@ -53,6 +56,7 @@ type TurnReport = {
   itemLuckGain: number;
   trapName?: string;
   trapPenalty: number;
+  trapLuckLoss: number;
   trapCaught: boolean;
   luckBefore: number;
   luckAfter: number;
@@ -130,8 +134,13 @@ const isChestDrop = (value: unknown): value is ChestDrop => {
     validCharacterRarities.includes(value.rarity as CharacterRarity);
 };
 
-function createJunctionWithChests(id: number, cameFrom?: Direction, ownedIds: string[] = ["pip"]): Junction {
-  const junction = createJunction(id, cameFrom);
+function createJunctionWithChests(
+  id: number,
+  cameFrom?: Direction,
+  ownedIds: string[] = ["pip"],
+  luck = 10,
+): Junction {
+  const junction = createJunction(id, cameFrom, luck);
   const chests: Partial<Record<Direction, ChestDrop>> = {};
   if (id < 3) {
     const character = starterCharacters.slice(1).find((entry) => !ownedIds.includes(entry.id));
@@ -153,7 +162,7 @@ function createJunctionWithChests(id: number, cameFrom?: Direction, ownedIds: st
     }
   } else {
     for (const direction of junction.options) {
-      const drop = rollPathChest(ownedIds, characters);
+      const drop = rollPathChest(ownedIds, characters, luck);
       if (drop) chests[direction] = drop;
     }
   }
@@ -214,6 +223,8 @@ function loadForeverSession(): Partial<GameState> | null {
         }
       }
       const chestDrop = isChestDrop(reportValue.chestDrop) ? reportValue.chestDrop : undefined;
+      const savedTrapName = typeof reportValue.trapName === "string" ? reportValue.trapName : undefined;
+      const savedTrap = trapDefinitions.find((trap) => trap.label === savedTrapName);
       lastReport = {
         room: Number(reportValue.room),
         actualDirection: reportValue.actualDirection,
@@ -230,8 +241,11 @@ function loadForeverSession(): Partial<GameState> | null {
         chestDrop,
         itemName: typeof reportValue.itemName === "string" ? reportValue.itemName : undefined,
         itemLuckGain: Number(reportValue.itemLuckGain),
-        trapName: typeof reportValue.trapName === "string" ? reportValue.trapName : undefined,
+        trapName: savedTrapName,
         trapPenalty: Number(reportValue.trapPenalty),
+        trapLuckLoss: Number.isFinite(reportValue.trapLuckLoss)
+          ? Number(reportValue.trapLuckLoss)
+          : savedTrap?.luckPenalty ?? 0,
         trapCaught: Boolean(reportValue.trapCaught),
         luckBefore: Number(reportValue.luckBefore),
         luckAfter: Number(reportValue.luckAfter),
@@ -254,7 +268,12 @@ function loadForeverSession(): Partial<GameState> | null {
         id: junctionId,
         options,
         hazards,
-        chests: savedChests ?? createJunctionWithChests(junctionId, isDirection(value.previous) ? value.previous : undefined, readOwnedCharacterIds()).chests,
+        chests: savedChests ?? createJunctionWithChests(
+          junctionId,
+          isDirection(value.previous) ? value.previous : undefined,
+          readOwnedCharacterIds(),
+          stats.luck ?? 10,
+        ).chests,
       },
       previous: isDirection(value.previous) ? value.previous : undefined,
       explorer: {
@@ -331,7 +350,6 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, React.ReactNode> = {
     coin: <><circle cx="12" cy="12" r="9" /><path d="M15 8.5c-.7-.8-1.7-1.2-3-1.2-1.7 0-2.8.8-2.8 2 0 3 6 1.5 6 4.4 0 1.3-1.2 2.2-3 2.2-1.4 0-2.6-.5-3.4-1.4M12 5.5v13" /></>,
     undo: <><path d="M3 7v6h6" /><path d="M5.2 12a7.5 7.5 0 1 1 1.9 5.1" /></>,
-    upload: <><path d="M12 16V4m-4 4 4-4 4 4" /><path d="M4 16v4h16v-4" /></>,
     arrow: <><path d="M5 12h14m-6-6 6 6-6 6" /></>,
     treasure: <><path d="M4 10h16v10H4zM3 6h18v4H3z" /><path d="M12 6v14m-3-14c-3 0-3-4 0-4 2 0 3 4 3 4m3 0c3 0 3-4 0-4-2 0-3 4-3 4" /></>,
     sound: <><path d="M11 5 6 9H3v6h3l5 4z" /><path d="M15 9a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12" /></>,
@@ -454,7 +472,7 @@ function LegacyMazeScene({
                     }}
                   >
                     <circle r="21" className={`route-marker ${selected ? "route-marker-selected" : ""} ${danger ? "route-marker-danger" : ""}`} />
-                    <text y="6" textAnchor="middle" className="route-letter">{String.fromCharCode(65 + allOptions.indexOf(direction))}</text>
+                    <text y="6" textAnchor="middle" className="route-letter">{directionLabels[direction]}</text>
                     {danger && <text x="0" y="43" textAnchor="middle" className="danger-caption">DANGER</text>}
                   </g>
                 )}
@@ -540,42 +558,68 @@ function MazeScene({
   );
 }
 
-function SelectionModal({
+function PlayerProfileModal({
+  avatar,
+  characterName,
+  selectedCharacterId,
+  progress,
   onSelect,
-  onUpload,
+  onShare,
+  onCopy,
+  onDownload,
   onClose,
-  hasCharacter,
+  canClose,
   ownedCharacterIds,
 }: {
+  avatar: string;
+  characterName: string;
+  selectedCharacterId: string;
+  progress: Progress;
   onSelect: (character: CharacterDefinition) => void;
-  onUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onShare: () => void;
+  onCopy: () => void;
+  onDownload: () => void;
   onClose: () => void;
-  hasCharacter: boolean;
+  canClose: boolean;
   ownedCharacterIds: string[];
 }) {
   const unlocked = characters.filter((character) => ownedCharacterIds.includes(character.id));
   return (
-    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <motion.section className="character-modal" initial={{ y: 16, scale: .97 }} animate={{ y: 0, scale: 1 }} aria-labelledby="character-title">
-        {hasCharacter && <button className="modal-close" onClick={onClose} aria-label="Close character picker">×</button>}
-        <span className="eyebrow">{hasCharacter ? "YOUR EXPLORER COLLECTION" : "A NEW ADVENTURE BEGINS"}</span>
-        <h2 id="character-title">{hasCharacter ? "Choose your explorer" : "Who's taking the first step?"}</h2>
-        <p>{hasCharacter ? `${ownedCharacterIds.length} of 100 explorers unlocked. Find character chests or visit the collection.` : "Seynabou Gaye is ready for the road. New friends are waiting in rare character chests."}</p>
-        <div className="character-options">
-          {unlocked.map((character) => (
-            <button key={character.id} className="character-choice" onClick={() => onSelect(character)}>
-              <img src={characterPortrait(character)} alt="" />
-              <span>{character.name}</span>
-              {hasCharacter && <small>{character.rarity}</small>}
-            </button>
-          ))}
+    <motion.div className="modal-backdrop profile-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <motion.section className="character-modal player-profile-modal" initial={{ y: 16, scale: .97 }} animate={{ y: 0, scale: 1 }} aria-labelledby="profile-title" role="dialog" aria-modal="true">
+        <div className="player-profile-header">
+          {canClose && <button className="modal-close" onClick={onClose} aria-label="Close player profile">×</button>}
+          <span className="eyebrow">YOUR FOREVER MAZE ADVENTURE</span>
+          <h2 id="profile-title">Your explorer profile</h2>
+          <div className="profile-identity">
+            <img src={avatar} alt="" />
+            <div><span>EXPLORING AS</span><strong>{characterName}</strong></div>
+          </div>
+          <div className="result-grid profile-stats">
+            <div><span>MONEY EARNED</span><strong>${formatCoinBalance(progress.totalEarned)}</strong></div>
+            <div><span>LONGEST RUN</span><strong>{progress.longestRun} <small>rooms</small></strong></div>
+            <div><span>HIGHEST LUCK</span><strong>{progress.highestLuck}%</strong></div>
+            <div><span>CHESTS FOUND</span><strong>{progress.chestsCollected}</strong></div>
+          </div>
+          <div className="result-actions profile-actions">
+            <button onClick={onCopy}>Copy profile</button>
+            <button onClick={onDownload}>Download card</button>
+            <button className="share-button" onClick={onShare}>Share your journey <Icon name="arrow" size={17} /></button>
+          </div>
+          <span className="eyebrow profile-collection-label">{canClose ? "CHOOSE YOUR EXPLORER" : "CHOOSE YOUR FIRST EXPLORER"}</span>
         </div>
-        <label className="upload-choice">
-          <Icon name="upload" size={19} />
-          <span>Upload your own explorer</span>
-          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onUpload} />
-        </label>
-        <div className="modal-footnote">A face for the road. No account, no stakes—just play.</div>
+        <div className="profile-explorer-scroll">
+          <div className="character-options">
+            {unlocked.map((character) => (
+              <button key={character.id} className={`character-choice ${selectedCharacterId === character.id ? "profile-explorer-selected" : ""}`} onClick={() => onSelect(character)} aria-pressed={selectedCharacterId === character.id}>
+                <img src={characterPortrait(character)} alt="" />
+                <span>{character.name}</span>
+                {canClose && <small>{selectedCharacterId === character.id ? "exploring" : character.rarity}</small>}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="modal-footnote profile-footnote">Your profile shares your explorer and maze milestones. No account or real-money play.</div>
       </motion.section>
     </motion.div>
   );
@@ -650,13 +694,13 @@ function TutorialModal({ onClose }: { onClose: () => void }) {
         <h2 id="tutorial-title">How to play</h2>
         <p id="tutorial-description" className="tutorial-intro">Read the crossroads, predict the explorer&apos;s next move, and learn what every part of the maze does. This guide is always available from the ? button.</p>
         <ol className="tutorial-steps">
-          <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. A risky marker warns that the route may bring a trap. Your first four predictions are guaranteed wins while you meet the explorer crew.</p></div></li>
+          <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. After the opening four rooms, a spiked trap on a path marks a risky route: it can cost coins and Luck, but pays 3× when your prediction is right. Your first four predictions are guaranteed wins while you meet the explorer crew.</p></div></li>
           <li><span>2</span><div><strong>Place your virtual coins</strong><p>Each tap adds 1 coin to a path; press and hold to add faster. Use Undo last coin to take back one. Your wager is split across the paths you chose.</p></div></li>
           <li><span>3</span><div><strong>Watch destiny unfold</strong><p>After you press Watch the turn, the explorer approaches, the camera zooms, then the random path is revealed. Correct predictions pay 2×, or 3× on a risky path. Read the turn report before continuing.</p></div></li>
           <li><span>4</span><div><strong>Find a chest on the path</strong><p>Each route can hide one chest, placed before your prediction. Coin chests hold 10–1,000 coins; rare violet character chests unlock collectible explorers. The first three chests introduce Moussa Kane, Aissatou Cisse, and Cheikh Thiam. Chest contents are revealed as soon as the explorer reaches them.</p></div></li>
           <li><span>5</span><div><strong>Your forever adventure</strong><p>Progress saves on this device and the maze keeps going. A daily pouch adds 100 free coins each new day; if you run out, wait for it to arrive.</p></div></li>
           <li><span>6</span><div><strong>Collect 100 explorers</strong><p>Start as Seynabou Gaye, earn explorers from rare character chests, or browse the gallery and buy a new companion for 15,000–200,000 virtual coins. Every explorer has a unique Senegalese name, portrait, and their own low-poly 3D look.</p></div></li>
-          <li><span>7</span><div><strong>Find luck and trouble</strong><p>Lucky items raise Luck, and traps can cost coins and Luck. Luck influences the chance of special events.</p></div></li>
+          <li><span>7</span><div><strong>Find luck and trouble</strong><p>Luck rises with good predictions and lucky items. Its influence scales from 0% at 0 Luck to 70% at 100 Luck: it slightly favors paths you backed, makes chests more likely, and makes traps less likely. Traps can still cost coins and Luck.</p></div></li>
           <li><span>8</span><div><strong>Day turns to night</strong><p>In-game day and night each last 5 minutes, with a gentle 30-second transition between them. It only changes the scenery—not luck, paths, or rewards.</p></div></li>
         </ol>
         <button className="tutorial-close-button" onClick={onClose}>Close guide &amp; keep exploring</button>
@@ -745,12 +789,13 @@ export default function Game() {
   const [selectedCharacterId, setSelectedCharacterId] = useState("pip");
   const [ownedCharacterIds, setOwnedCharacterIds] = useState<string[]>(["pip"]);
   const [hasPickedCharacter, setHasPickedCharacter] = useState(false);
-  const [showPicker, setShowPicker] = useState(true);
+  const [showProfile, setShowProfile] = useState(true);
   const [characterCollectionOpen, setCharacterCollectionOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialSeen, setTutorialSeen] = useState(false);
-  const [resultOpen, setResultOpen] = useState(false);
   const [turnResult, setTurnResult] = useState<TurnReport | null>(null);
+  const [coinCountAnimation, setCoinCountAnimation] = useState<{ from: number; to: number } | null>(null);
+  const [coinCountValue, setCoinCountValue] = useState<number | null>(null);
   const [shopOpen, setShopOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [ownedCosmetics, setOwnedCosmetics] = useState<string[]>([]);
@@ -765,6 +810,34 @@ export default function Game() {
   const lastPlacedDirectionRef = useRef<Direction | null>(null);
   const chestRevealPausedRef = useRef(false);
   const addBetRef = useRef<(direction: Direction, amount?: number) => void>(() => {});
+
+  useEffect(() => {
+    if (!coinCountAnimation) return;
+    const startedAt = performance.now();
+    const duration = 1100;
+    let frame = 0;
+    let previousValue = coinCountAnimation.from;
+    setCoinCountValue(previousValue);
+    const animate = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - (1 - progress) ** 3;
+      const nextValue = Math.round(
+        coinCountAnimation.from + (coinCountAnimation.to - coinCountAnimation.from) * eased,
+      );
+      if (nextValue !== previousValue) {
+        previousValue = nextValue;
+        setCoinCountValue(nextValue);
+      }
+      if (progress < 1) {
+        frame = window.requestAnimationFrame(animate);
+      } else {
+        setCoinCountAnimation(null);
+        setCoinCountValue(null);
+      }
+    };
+    frame = window.requestAnimationFrame(animate);
+    return () => window.cancelAnimationFrame(frame);
+  }, [coinCountAnimation]);
 
   useEffect(() => {
     setSoundEnabled(loadSoundEnabled());
@@ -793,7 +866,13 @@ export default function Game() {
   const selectedCount = Object.values(game.bets).filter((amount) => amount > 0).length;
   const totalBet = Object.values(game.bets).reduce((sum, amount) => sum + amount, 0);
   const suspenseReport = (game.phase === "approaching" || game.phase === "moving" || game.phase === "chest") ? game.lastReport : null;
-  const displayMoney = suspenseReport?.balanceBefore ?? game.money;
+  const reservedBalance = Math.max(0, (suspenseReport?.balanceBefore ?? turnResult?.balanceBefore ?? game.money) -
+    (suspenseReport?.totalStake ?? (game.phase === "choosing" ? totalBet : turnResult?.totalStake ?? 0)));
+  const displayMoney = coinCountAnimation
+    ? coinCountValue ?? coinCountAnimation.from
+    : suspenseReport || (turnResult && game.phase === "result") || game.phase === "choosing"
+      ? reservedBalance
+      : game.money;
   const displayLuck = suspenseReport?.luckBefore ?? luck;
   const displayRoom = suspenseReport?.room ?? game.run + 1;
   const displayChests = game.chestCount - (suspenseReport?.chestName ? 1 : 0);
@@ -803,10 +882,9 @@ export default function Game() {
   const equippedIcon = cosmeticDefinitions.find((cosmetic) => cosmetic.id === equipped.icon)?.icon;
   const equippedBadge = cosmeticDefinitions.find((cosmetic) => cosmetic.id === equipped.badge);
   const currentOptions = game.junction.options;
-  const optionNames = currentOptions.map((direction, index) => ({
-    direction,
-    label: String.fromCharCode(65 + index),
-  }));
+  const optionNames = currentOptions.map((direction) => {
+    return { direction, label: directionLabels[direction] };
+  });
   const avatarName = characterName;
 
   useEffect(() => {
@@ -837,17 +915,24 @@ export default function Game() {
             ?? starterCharacters.find((character) => character.id === legacyNameId);
           const selectedId = typeof characterValue.id === "string" && characterById.has(characterValue.id)
             ? characterValue.id
-            : legacyCharacter?.id ?? "custom";
+            : legacyCharacter?.id ?? "pip";
           const restoredCharacter = characterById.get(selectedId);
-          const nextOwned = selectedId !== "custom" && !restoredOwnedIds.includes(selectedId)
+          const nextOwned = !restoredOwnedIds.includes(selectedId)
             ? [...restoredOwnedIds, selectedId]
             : restoredOwnedIds;
           setOwnedCharacterIds(nextOwned);
           setSelectedCharacterId(selectedId);
-          setCharacterName(restoredCharacter?.name ?? characterValue.name);
-          setAvatar(restoredCharacter ? characterPortrait(restoredCharacter) : characterValue.avatar);
+          setCharacterName(restoredCharacter?.name ?? starterCharacters[0].name);
+          setAvatar(restoredCharacter ? characterPortrait(restoredCharacter) : characterPortrait(starterCharacters[0]));
           setHasPickedCharacter(true);
-          setShowPicker(false);
+          setShowProfile(false);
+          if (!restoredCharacter) {
+            window.localStorage.setItem("amazing-gambler-forever-character", JSON.stringify({
+              id: starterCharacters[0].id,
+              name: starterCharacters[0].name,
+              avatar: characterPortrait(starterCharacters[0]),
+            }));
+          }
           if (nextOwned.length !== restoredOwnedIds.length) {
             window.localStorage.setItem(OWNED_CHARACTERS_KEY, JSON.stringify(nextOwned));
           }
@@ -993,7 +1078,7 @@ export default function Game() {
     }
     if (game.phase === "moving" && game.lastReport) {
       const timer = window.setTimeout(() => {
-        const junction = createJunctionWithChests(game.run, game.previous, ownedCharacterIds);
+        const junction = createJunctionWithChests(game.run, game.previous, ownedCharacterIds, game.stats.luck ?? 10);
         playGameSound(game.lastReport?.hit ? "success" : "miss");
         game.set({
           phase: "result",
@@ -1028,29 +1113,13 @@ export default function Game() {
     setCharacterName(character.name);
     setSelectedCharacterId(character.id);
     setHasPickedCharacter(true);
-    setShowPicker(false);
+    setShowProfile(false);
     try {
       window.localStorage.setItem("amazing-gambler-forever-character", JSON.stringify({
         id: character.id,
         name: character.name,
         avatar: characterPortrait(character),
       }));
-    } catch (error) {
-      console.error("Unable to save your explorer.", error);
-      setToast("Your explorer could not be saved on this device.");
-    }
-    if (!tutorialSeen) setShowTutorial(true);
-    if (!["result", "approaching", "moving", "chest"].includes(game.phase)) game.set({ phase: "walking" });
-  };
-
-  const chooseCustomCharacter = (name: string, image: string) => {
-    setAvatar(image);
-    setCharacterName(name);
-    setSelectedCharacterId("custom");
-    setHasPickedCharacter(true);
-    setShowPicker(false);
-    try {
-      window.localStorage.setItem("amazing-gambler-forever-character", JSON.stringify({ id: "custom", name, avatar: image }));
     } catch (error) {
       console.error("Unable to save your explorer.", error);
       setToast("Your explorer could not be saved on this device.");
@@ -1101,25 +1170,6 @@ export default function Game() {
     } catch (error) {
       console.error("Unable to save the tutorial preference.", error);
     }
-  };
-
-  const uploadCharacter = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setToast("That image is a little too large (max 5 MB).");
-      window.setTimeout(() => setToast(""), 2800);
-      return;
-    }
-    const reader = new FileReader();
-    reader.onerror = () => {
-      setToast("We couldn’t open that image. Try another one.");
-      window.setTimeout(() => setToast(""), 2800);
-    };
-    reader.onload = () => {
-      if (typeof reader.result === "string") chooseCustomCharacter("Your explorer", reader.result);
-    };
-    reader.readAsDataURL(file);
   };
 
   const addBet = (direction: Direction, amount = 1) => {
@@ -1194,8 +1244,8 @@ export default function Game() {
     const guaranteedWin = game.run < 4;
     const backedOptions = options.filter((direction) => game.bets[direction] > 0);
     const actualDirection = guaranteedWin
-      ? backedOptions[Math.floor(Math.random() * backedOptions.length)]
-      : options[Math.floor(Math.random() * options.length)];
+      ? choosePredictedPath(backedOptions, game.bets, luck)
+      : choosePredictedPath(options, game.bets, luck);
     const hit = guaranteedWin || game.bets[actualDirection] > 0;
     const dangerous = game.junction.hazards.includes(actualDirection);
     const predictedTrap = hit && dangerous;
@@ -1239,9 +1289,9 @@ export default function Game() {
     const requestedTrapPenalty = trap ? trap.moneyPenalty + (trapCaught ? 10 : 0) : 0;
     const balanceBeforeTrap = Math.max(0, balanceBefore - totalBet + pathReward + (chest?.reward ?? 0) + fortuneBonus);
     const trapPenalty = Math.min(requestedTrapPenalty, balanceBeforeTrap);
-    if (trap) {
-      nextLuck = Math.max(0, nextLuck - trap.luckPenalty);
-    }
+    const luckBeforeTrap = nextLuck;
+    if (trap) nextLuck = Math.max(0, nextLuck - trap.luckPenalty);
+    const trapLuckLoss = luckBeforeTrap - nextLuck;
     const nextMoney = balanceBeforeTrap - trapPenalty;
     const selectedBets: Partial<BetMap> = {};
     for (const direction of Object.keys(game.bets) as Direction[]) {
@@ -1265,6 +1315,7 @@ export default function Game() {
       itemLuckGain,
       trapName: trap?.label,
       trapPenalty,
+      trapLuckLoss,
       trapCaught,
       luckBefore: oldLuck,
       luckAfter: nextLuck,
@@ -1352,11 +1403,11 @@ export default function Game() {
     window.setTimeout(() => setToast(""), 2400);
   };
 
-  const shareText = `Amazing Gambler — $${game.progress.totalEarned.toLocaleString()} earned, ${game.progress.longestRun} rooms explored, ${game.progress.chestsCollected} treasures found. Predict the path!`;
+  const shareText = `Amazing Gambler — ${characterName}'s adventure: $${game.progress.totalEarned.toLocaleString()} earned, ${game.progress.longestRun} rooms explored, ${game.progress.highestLuck}% highest luck, ${game.progress.chestsCollected} treasures found. Predict the path!`;
   const copyResult = async () => {
     try {
       await navigator.clipboard.writeText(shareText);
-      setToast("Your adventure is copied and ready to share.");
+      setToast("Your explorer profile is copied and ready to share.");
     } catch {
       setToast("Copy isn’t available here. Try your browser’s share button.");
     }
@@ -1394,11 +1445,14 @@ export default function Game() {
     context.font = "italic 24px Georgia";
     context.fillStyle = "#63766a";
     context.fillText("Predict the Path. Trust the Luck. Win the Fortune.", 72, 154);
+    context.font = "700 21px Arial";
+    context.fillStyle = "#365c49";
+    context.fillText(`EXPLORER · ${characterName.toUpperCase()}`, 72, 184);
     context.strokeStyle = "#c8bfa8";
     context.lineWidth = 2;
     context.beginPath();
-    context.moveTo(72, 190);
-    context.lineTo(1128, 190);
+    context.moveTo(72, 205);
+    context.lineTo(1128, 205);
     context.stroke();
     const stats = [
       ["MONEY EARNED", `$${game.progress.totalEarned.toLocaleString()}`],
@@ -1408,7 +1462,7 @@ export default function Game() {
     ];
     stats.forEach(([label, value], index) => {
       const x = 72 + (index % 2) * 520;
-      const y = 300 + Math.floor(index / 2) * 150;
+      const y = 300 + Math.floor(index / 2) * 145;
       context!.fillStyle = "#66796e";
       context!.font = "600 20px Arial";
       context!.fillText(label, x, y);
@@ -1429,6 +1483,11 @@ export default function Game() {
 
   const isDangerous = (direction: Direction) => game.junction.hazards.includes(direction);
   const advanceAfterReport = () => {
+    if (turnResult) {
+      const availableBeforeTurn = Math.max(0, turnResult.balanceBefore - turnResult.totalStake);
+      setCoinCountValue(availableBeforeTurn);
+      setCoinCountAnimation({ from: availableBeforeTurn, to: turnResult.balanceAfter });
+    }
     setTurnResult(null);
     game.set({
       phase: "choosing",
@@ -1436,7 +1495,8 @@ export default function Game() {
       message: "Choose a path. Trust your instincts.",
     });
   };
-  const resultPath = turnResult ? directionNames[turnResult.actualDirection] : "";
+  const turnPathName = (direction: Direction) => directionNames[direction];
+  const resultPath = turnResult ? turnPathName(turnResult.actualDirection) : "";
   const netCoins = turnResult ? turnResult.balanceAfter - turnResult.balanceBefore : 0;
   const predictedPaths = turnResult
     ? (Object.entries(turnResult.placedBets) as [Direction, number][]).filter(([, amount]) => amount > 0)
@@ -1464,7 +1524,7 @@ export default function Game() {
           <span className="hud-overline">THE FOREVER MAZE</span>
           <strong>ROOM {String(displayRoom).padStart(2, "0")}</strong>
         </div>
-        <div className="hud-luck glass-panel" aria-label={`Luck ${displayLuck} percent`}>
+        <div className="hud-luck glass-panel" aria-label={`Luck ${displayLuck} percent; ${Math.round(luckInfluence(displayLuck) * 100)} percent influence`}>
           <div className="hud-luck-top"><span>☘</span><span>LUCK</span><strong>{displayLuck}%</strong></div>
           <div className="hud-luck-track"><div className="hud-luck-fill" style={{ width: `${Math.min(100, displayLuck)}%` }} /></div>
           {game.overflow && <span className="hud-overflow">FORTUNE READY</span>}
@@ -1479,12 +1539,11 @@ export default function Game() {
       <div className="world-title"><span className="world-clover">{equippedIcon ?? "✳"}</span><span>AMAZING GAMBLER</span><span className="world-biome">{environmentForRoom(game.junction.id + 1).name}</span><span className="world-time">{worldPhase}</span></div>
 
       <div className="world-shortcuts">
-        <button className="profile-button glass-panel" onClick={() => setShowPicker(true)} aria-label={`Change explorer, current character ${avatarName}`}>
+        <button className="profile-button glass-panel" onClick={() => setShowProfile(true)} aria-label={`Open player profile, currently exploring as ${avatarName}`}>
           <img src={avatar} alt="" /><span>{avatarName}</span><span className="profile-caret">⌄</span>
         </button>
         <button className="glass-tool" onClick={() => setShopOpen(true)}>✦ <span>Curio cabinet</span></button>
         <button className="glass-tool character-gallery-button" onClick={() => setCharacterCollectionOpen(true)} aria-label="Open character collection">♙ <span>Explorers</span></button>
-        <button className="glass-tool" onClick={() => setResultOpen(true)}>✧ <span>Journey card</span></button>
         <button className="glass-tool" onClick={() => setShowTutorial(true)} aria-label="Open game guide">? <span>Game guide</span></button>
         <PwaInstallButton />
         <button
@@ -1516,7 +1575,7 @@ export default function Game() {
           {optionNames.map(({ direction, label }) => (
             <button
               key={direction}
-              className={`route-option ${game.bets[direction] > 0 ? "route-option-active" : ""} ${isDangerous(direction) ? "route-option-danger" : ""}`}
+              className={`route-option route-option-${direction} ${game.bets[direction] > 0 ? "route-option-active" : ""} ${isDangerous(direction) ? "route-option-danger" : ""}`}
               onPointerDown={(event) => { if (event.button === 0) startPathHold(direction); }}
               onPointerLeave={() => {
                 if (heldPathRef.current?.direction === direction) stopPathHold();
@@ -1561,12 +1620,26 @@ export default function Game() {
       </section>
 
       <AnimatePresence>
-        {showPicker && <SelectionModal onSelect={chooseCharacter} onUpload={uploadCharacter} onClose={() => { setShowPicker(false); if (game.phase === "choosing") game.set({ phase: "walking" }); }} hasCharacter={hasPickedCharacter} ownedCharacterIds={ownedCharacterIds} />}
+        {showProfile && (
+          <PlayerProfileModal
+            avatar={avatar}
+            characterName={characterName}
+            selectedCharacterId={selectedCharacterId}
+            progress={game.progress}
+            onSelect={chooseCharacter}
+            onShare={() => void shareResult()}
+            onCopy={() => void copyResult()}
+            onDownload={downloadResult}
+            onClose={() => setShowProfile(false)}
+            canClose={hasPickedCharacter}
+            ownedCharacterIds={ownedCharacterIds}
+          />
+        )}
         {showTutorial && <TutorialModal onClose={closeTutorial} />}
         {game.phase === "chest" && turnResult?.chestDrop && (
           <motion.div className="turn-report-backdrop chest-reveal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <motion.section className={`chest-reveal-card glass-panel ${turnResult.chestDrop.kind === "character" ? "chest-reveal-character" : "chest-reveal-coins"}`} role="dialog" aria-modal="true" aria-labelledby="chest-reveal-title" initial={{ y: 18, scale: .96 }} animate={{ y: 0, scale: 1 }}>
-              <span className="chest-reveal-kicker">FOUND ON THE {directionNames[turnResult.actualDirection].toUpperCase()} PATH · {turnResult.chestDrop.rarity.toUpperCase()}</span>
+              <span className="chest-reveal-kicker">FOUND ON THE {turnPathName(turnResult.actualDirection).toUpperCase()} PATH · {turnResult.chestDrop.rarity.toUpperCase()}</span>
               <div className="chest-reveal-art" style={{ "--chest-color": turnResult.chestDrop.color } as React.CSSProperties}>
                 {turnResult.chestDrop.kind === "character"
                   ? <img src={characterPortrait(characterById.get(turnResult.chestDrop.characterId) ?? starterCharacters[0])} alt="" />
@@ -1591,6 +1664,36 @@ export default function Game() {
         )}
         {turnResult && game.phase === "result" && (
           <motion.div className="turn-report-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            {turnResult.trapName ? (
+              <motion.section className="trap-report glass-panel" role="dialog" aria-modal="true" aria-labelledby="trap-report-title" initial={{ y: 18, scale: .97 }} animate={{ y: 0, scale: 1 }} exit={{ y: 10, scale: .98 }}>
+                <span className="turn-report-kicker">ROOM {String(turnResult.room).padStart(2, "0")} · TRAP ENCOUNTER</span>
+                <div className="trap-report-mark" aria-hidden="true">
+                  {trapDefinitions.find((trap) => trap.label === turnResult.trapName)?.icon ?? "!"}
+                </div>
+                <h2 id="trap-report-title">{turnResult.trapName} sprung!</h2>
+                <p className="turn-report-summary">
+                  {characterName} hit a trap on the <strong>{resultPath}</strong> path.
+                  {turnResult.trapCaught ? " The explorer was caught." : " The explorer escaped the worst of it."}
+                </p>
+                <div className="trap-loss-grid">
+                  <div><span>COINS LOST</span><strong>−{turnResult.trapPenalty}</strong></div>
+                  <div><span>LUCK LOST</span><strong>−{turnResult.trapLuckLoss}%</strong></div>
+                </div>
+                <div className="turn-report-lines">
+                  <div><span>Your coins placed</span><strong>−{turnResult.totalStake}</strong></div>
+                  <div><span>{turnResult.hit ? `Correct path · ${turnResult.risky ? "risky 3×" : "2×"} payout` : "Path prediction"}</span><strong>{turnResult.pathReward ? `+${turnResult.pathReward}` : "—"}</strong></div>
+                  {turnResult.chestReward > 0 && <div><span>{turnResult.chestName ?? "Treasure chest"}</span><strong>+{turnResult.chestReward}</strong></div>}
+                  {turnResult.chestDrop?.kind === "character" && <div><span>New explorer · {turnResult.chestName}</span><strong>Unlocked</strong></div>}
+                  {turnResult.itemName && <div><span>{turnResult.itemName}</span><strong>+{turnResult.itemLuckGain}% luck</strong></div>}
+                  <div><span>Luck after turn</span><strong>{turnResult.luckBefore}% <span>→</span> {turnResult.luckAfter}%</strong></div>
+                  <div className="turn-line-total"><span>Coin balance</span><strong>{turnResult.balanceBefore} <span>→</span> {turnResult.balanceAfter}</strong></div>
+                </div>
+                <button className="turn-continue" data-sound="continue" onClick={advanceAfterReport}>
+                  Continue to room {String(game.run + 1).padStart(2, "0")} <Icon name="arrow" size={18} />
+                </button>
+                <p className="turn-report-note">The maze keeps going. Your forever adventure is saved automatically.</p>
+              </motion.section>
+            ) : (
             <motion.section className="turn-report glass-panel" role="dialog" aria-modal="true" aria-labelledby="turn-report-title" initial={{ y: 18, scale: .97 }} animate={{ y: 0, scale: 1 }} exit={{ y: 10, scale: .98 }}>
               <span className="turn-report-kicker">ROOM {String(turnResult.room).padStart(2, "0")} · TURN REPORT</span>
               <div className={`turn-outcome-mark ${turnResult.hit ? "turn-outcome-win" : ""}`}>{turnResult.hit ? "✦" : "↗"}</div>
@@ -1600,7 +1703,7 @@ export default function Game() {
                 {turnResult.hit
                   ? ` You backed it with ${turnResult.placedBets[turnResult.actualDirection] ?? 0} coin${turnResult.placedBets[turnResult.actualDirection] === 1 ? "" : "s"}.`
                   : predictedPaths.length
-                      ? ` You backed ${predictedPaths.map(([direction]) => directionNames[direction]).join(" and ")}.`
+                      ? ` You backed ${predictedPaths.map(([direction]) => turnPathName(direction)).join(" and ")}.`
                     : " No coins were placed on that path."}
               </p>
               <div className="turn-report-lines">
@@ -1622,27 +1725,7 @@ export default function Game() {
               </button>
               <p className="turn-report-note">The maze keeps going. Your forever adventure is saved automatically.</p>
             </motion.section>
-          </motion.div>
-        )}
-        {resultOpen && (
-          <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setResultOpen(false)}>
-            <motion.section className="result-modal" initial={{ y: 18 }} animate={{ y: 0 }} exit={{ y: 12 }} onClick={(event) => event.stopPropagation()}>
-              <button className="modal-close" onClick={() => setResultOpen(false)} aria-label="Close result card">×</button>
-              <span className="eyebrow">A LITTLE SOMETHING TO REMEMBER</span>
-              <h2>Your adventure so far</h2>
-              <div className="result-card">
-                <div className="result-brand"><span>✳</span> AMAZING GAMBLER</div>
-                <p>Predict the Path. Trust the Luck. Win the Fortune.</p>
-                <div className="result-grid">
-                  <div><span>MONEY EARNED</span><strong>${game.progress.totalEarned.toLocaleString()}</strong></div>
-                  <div><span>LONGEST RUN</span><strong>{game.progress.longestRun} <small>rooms</small></strong></div>
-                  <div><span>HIGHEST LUCK</span><strong>{game.progress.highestLuck}%</strong></div>
-                  <div><span>CHESTS FOUND</span><strong>{game.progress.chestsCollected}</strong></div>
-                </div>
-                <div className="result-footer">A little luck goes a long way. <span>✳</span></div>
-              </div>
-              <div className="result-actions"><button onClick={() => void copyResult()}>Copy result</button><button onClick={downloadResult}>Download card</button><button className="share-button" onClick={() => void shareResult()}>Share your luck <Icon name="arrow" size={17} /></button></div>
-            </motion.section>
+            )}
           </motion.div>
         )}
         {shopOpen && (

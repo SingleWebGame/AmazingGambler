@@ -120,6 +120,13 @@ export const directionNames: Record<Direction, string> = {
   west: "West",
 };
 
+export const directionLabels: Record<Direction, string> = {
+  east: "A",
+  north: "B",
+  west: "C",
+  south: "D",
+};
+
 export const directionVectors: Record<Direction, { x: number; y: number }> = {
   north: { x: 0, y: -1 },
   east: { x: 1, y: 0 },
@@ -144,7 +151,32 @@ export const emptyProgress: Progress = {
   trapPredictions: 0,
 };
 
-export function createJunction(id: number, cameFrom?: Direction): Junction {
+export function luckInfluence(luck: number): number {
+  if (!Number.isFinite(luck)) return 0;
+  return Math.min(100, Math.max(0, luck)) * 0.007;
+}
+
+export function choosePredictedPath(
+  options: Direction[],
+  bets: Partial<Record<Direction, number>>,
+  luck: number,
+): Direction {
+  if (!options.length) throw new Error("Cannot choose a path from an empty junction.");
+  const bonus = luckInfluence(luck);
+  const weighted = options.map((direction) => ({
+    direction,
+    weight: (bets[direction] ?? 0) > 0 ? 1 + bonus : 1,
+  }));
+  const totalWeight = weighted.reduce((total, option) => total + option.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const option of weighted) {
+    roll -= option.weight;
+    if (roll < 0) return option.direction;
+  }
+  return weighted[weighted.length - 1].direction;
+}
+
+export function createJunction(id: number, cameFrom?: Direction, luck = 10): Junction {
   const possible = (Object.keys(directionVectors) as Direction[]).filter(
     (direction) => direction !== (cameFrom ? reverseDirection[cameFrom] : undefined),
   );
@@ -152,7 +184,7 @@ export function createJunction(id: number, cameFrom?: Direction): Junction {
   const count = 2 + Math.floor(Math.random() * 3);
   const options = shuffled.slice(0, count);
   const hazards =
-    Math.random() < 0.35
+    Math.random() < 0.35 * (1 - luckInfluence(luck))
       ? [options[Math.floor(Math.random() * options.length)]]
       : [];
   return { id, options, hazards, chests: {} };
@@ -214,9 +246,11 @@ export function rollCharacterChest(ownedIds: string[], available: { id: string; 
 export function rollPathChest(
   ownedIds: string[],
   available: { id: string; rarity: CharacterRarity; name: string }[],
+  luck = 10,
 ): ChestDrop | null {
-  if (Math.random() >= 0.14) return null;
-  if (Math.random() < 0.035) {
+  const influence = luckInfluence(luck);
+  if (Math.random() >= 0.14 * (1 + influence)) return null;
+  if (Math.random() < 0.035 * (1 + influence)) {
     const characterChest = rollCharacterChest(ownedIds, available);
     if (characterChest) return characterChest;
   }
@@ -224,9 +258,12 @@ export function rollPathChest(
 }
 
 export function rollEvent(luck: number): EventKind {
-  const rareRoll = Math.random() + (luck > 80 ? 0.025 : 0);
-  if (rareRoll < 0.13) return "trap";
-  if (rareRoll < 0.28) return "item";
+  const influence = luckInfluence(luck);
+  const trapChance = 0.13 * (1 - influence);
+  const itemChance = 0.15 * (1 + influence);
+  const roll = Math.random();
+  if (roll < trapChance) return "trap";
+  if (roll < trapChance + itemChance) return "item";
   return "quiet";
 }
 

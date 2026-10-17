@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import {
+  directionLabels,
   directionVectors,
   type ChestDrop,
   type Direction,
@@ -51,7 +52,6 @@ type SceneAssets = {
   movement: { from: THREE.Vector3; to: THREE.Vector3; startedAt: number; duration: number; facing: number } | null;
   suspenseStartedAt: number | null;
   chestPickedUp: boolean;
-  orientationAngle: number;
   routeIndicatorElements: Partial<Record<Direction, HTMLSpanElement>>;
 };
 
@@ -151,13 +151,6 @@ const reverseDirection: Record<Direction, Direction> = {
   south: "north",
   west: "east",
 };
-const directionOrder: Direction[] = ["north", "east", "south", "west"];
-const orientationFor = (cameFrom?: Direction) => {
-  const entry = cameFrom ? reverseDirection[cameFrom] : "south";
-  return ((2 - directionOrder.indexOf(entry) + 4) % 4) * (Math.PI / 2);
-};
-const rotatedDirectionPoint = (direction: Direction, distance: number, angle: number) =>
-  directionPoint(direction, distance).applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
 const directionAngles: Record<Direction, number> = {
   north: 0,
   east: Math.PI / 2,
@@ -168,6 +161,13 @@ const directionPoint = (direction: Direction, distance: number) => {
   const vector = directionVectors[direction];
   return new THREE.Vector3(vector.x * distance, 0, vector.y * distance);
 };
+const ENTRY_CHEST_DISTANCE = 4.05;
+const TRAP_DISTANCE = 7.3;
+const ROUTE_INDICATOR_DISTANCE = 3.6;
+const isEntryPathChest = (direction: Direction, previous?: Direction) =>
+  direction === (previous ? reverseDirection[previous] : "south");
+const chestDistance = (direction: Direction, previous?: Direction) =>
+  isEntryPathChest(direction, previous) ? ENTRY_CHEST_DISTANCE : 1.95;
 const makeMaterial = (color: THREE.ColorRepresentation, roughness = 1) =>
   new THREE.MeshStandardMaterial({ color, roughness, flatShading: true });
 
@@ -323,6 +323,15 @@ function addStoneRuin(parent: THREE.Group, x: number, z: number, scale: number, 
   parent.add(ruin);
 }
 
+function blocksRoute(x: number, z: number) {
+  const pathLength = 10;
+  const pathWidth = 3.1;
+  return (
+    (Math.abs(x) < pathWidth && Math.abs(z) < pathLength) ||
+    (Math.abs(z) < pathWidth && Math.abs(x) < pathLength)
+  );
+}
+
 function buildForest(parent: THREE.Group, biome: EnvironmentBiome) {
   const foliage = biome.foliage;
   const count = biome.name === "Tropical Forest" ? 30 : biome.name === "Sandstone Ruins" ? 12 : 20;
@@ -331,6 +340,7 @@ function buildForest(parent: THREE.Group, biome: EnvironmentBiome) {
     const radius = (biome.name === "Tropical Forest" ? 7.2 : 8.1) + (i % 5) * 0.62;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius * 0.72;
+    if (blocksRoute(x, z)) continue;
     const scale = 0.78 + (i % 4) * 0.13;
     if (biome.name === "Baobab Woodland") addBaobab(parent, x, z, scale, foliage, i);
     else if (biome.name === "Tropical Forest") addPalm(parent, x, z, scale, foliage, i);
@@ -342,6 +352,7 @@ function buildForest(parent: THREE.Group, biome: EnvironmentBiome) {
     const radius = 4.9 + (i % 5) * 0.43;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius * 0.7;
+    if (blocksRoute(x, z)) continue;
     if (biome.name === "Sandstone Ruins" && i % 2 === 0) {
       addStoneRuin(parent, x, z, 0.76 + (i % 3) * 0.12, i);
     } else {
@@ -352,12 +363,15 @@ function buildForest(parent: THREE.Group, biome: EnvironmentBiome) {
     for (let i = 0; i < 14; i++) {
       const angle = i * 2.399963 + 0.58;
       const radius = 7.4 + (i % 4) * 0.67;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius * 0.7;
+      if (blocksRoute(x, z)) continue;
       const rock = new THREE.Mesh(
         new THREE.DodecahedronGeometry(0.56 + (i % 3) * 0.14, 0),
         makeMaterial(i % 2 ? "#9e7955" : "#b18a5e"),
       );
       rock.scale.set(1.28, 0.8, 1);
-      rock.position.set(Math.cos(angle) * radius, 0.36, Math.sin(angle) * radius * 0.7);
+      rock.position.set(x, 0.36, z);
       rock.castShadow = true;
       parent.add(rock);
     }
@@ -398,7 +412,7 @@ function buildPath(scene: THREE.Group, direction: Direction, open: boolean, biom
   const arm = new THREE.Group();
   const vector = directionPoint(direction, 1);
   const lane = new THREE.Mesh(
-    new THREE.BoxGeometry(2.45, 0.1, 8.9),
+    new THREE.BoxGeometry(2.9, 0.1, 8.9),
     makeMaterial(biome.path),
   );
   lane.position.set(vector.x * 4.45, 0.19, vector.z * 4.45);
@@ -406,7 +420,7 @@ function buildPath(scene: THREE.Group, direction: Direction, open: boolean, biom
   lane.receiveShadow = true;
   arm.add(lane);
   const centerLine = new THREE.Mesh(
-    new THREE.BoxGeometry(0.055, 0.012, 6.7),
+    new THREE.BoxGeometry(0.11, 0.018, 6.7),
     makeMaterial(biome.pathLine),
   );
   centerLine.position.set(vector.x * 4.35, 0.25, vector.z * 4.35);
@@ -416,7 +430,7 @@ function buildPath(scene: THREE.Group, direction: Direction, open: boolean, biom
   for (const side of [-1, 1]) {
     for (let segment = 0; segment < 5; segment++) {
       const distance = 2.35 + segment * 1.08;
-      const sideOffset = side * 1.74;
+      const sideOffset = side * 2.05;
       const x = direction === "east" || direction === "west" ? vector.x * distance : sideOffset;
       const z = direction === "north" || direction === "south" ? vector.z * distance : sideOffset;
       if (open && distance > 6.7) continue;
@@ -488,6 +502,7 @@ function buildChest(
   direction: Direction,
   drop: ChestDrop,
   iconTextures: Record<ChestDrop["kind"], THREE.CanvasTexture>,
+  distance: number,
 ) {
   const chest = pool.pop() ?? new THREE.Group();
   poolGroup.remove(chest);
@@ -545,7 +560,7 @@ function buildChest(
   }
   chest.userData.direction = direction;
   chest.userData.animationPhase = directions.indexOf(direction) * 1.3;
-  const point = directionPoint(direction, 1.95);
+  const point = directionPoint(direction, distance);
   chest.position.set(point.x, 0.22, point.z);
   chest.visible = true;
   parent.add(chest);
@@ -695,6 +710,7 @@ function buildMarkers(
   parent: THREE.Group,
   junction: Junction,
   bets: Record<Direction, number>,
+  previous: Direction | undefined,
   markerMeshes: THREE.Mesh[],
 ) {
   parent.children.slice().forEach((child) => {
@@ -712,7 +728,50 @@ function buildMarkers(
     });
   });
   markerMeshes.length = 0;
-  junction.options.forEach((direction, index) => {
+  junction.hazards.forEach((direction) => {
+    const point = directionPoint(direction, TRAP_DISTANCE);
+    const trap = new THREE.Group();
+    trap.position.set(point.x, 0.14, point.z);
+
+    const plate = new THREE.Mesh(
+      new THREE.BoxGeometry(1.2, 0.12, 1.2),
+      new THREE.MeshStandardMaterial({ color: "#433a30", roughness: 0.88, flatShading: true }),
+    );
+    plate.position.y = 0.08;
+    plate.castShadow = true;
+    plate.receiveShadow = true;
+    trap.add(plate);
+
+    const rim = new THREE.Mesh(
+      new THREE.TorusGeometry(0.78, 0.055, 5, 8),
+      new THREE.MeshStandardMaterial({
+        color: "#d88c63",
+        emissive: "#8e392b",
+        emissiveIntensity: 0.35,
+        roughness: 0.58,
+        flatShading: true,
+      }),
+    );
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = 0.2;
+    trap.add(rim);
+
+    for (let spike = 0; spike < 4; spike++) {
+      const angle = spike * Math.PI / 2 + Math.PI / 4;
+      const stake = new THREE.Mesh(
+        new THREE.ConeGeometry(0.17, 0.72, 5),
+        new THREE.MeshStandardMaterial({ color: "#d78366", roughness: 0.64, flatShading: true }),
+      );
+      stake.position.set(Math.cos(angle) * 0.38, 0.48, Math.sin(angle) * 0.38);
+      stake.rotation.z = -Math.cos(angle) * 0.28;
+      stake.rotation.x = Math.sin(angle) * 0.28;
+      stake.castShadow = true;
+      trap.add(stake);
+    }
+    parent.add(trap);
+  });
+
+  junction.options.forEach((direction) => {
     const point = directionPoint(direction, 6.25);
     const selected = bets[direction] > 0;
     const dangerous = junction.hazards.includes(direction);
@@ -742,7 +801,7 @@ function buildMarkers(
     inner.rotation.x = -Math.PI / 2;
     inner.position.y = 0.29;
     group.add(inner);
-    const letterTexture = makeLabelTexture(String.fromCharCode(65 + index), color);
+    const letterTexture = makeLabelTexture(directionLabels[direction], color);
     if (letterTexture) {
       const sprite = new THREE.Sprite(
         new THREE.SpriteMaterial({ map: letterTexture, transparent: true, depthWrite: false }),
@@ -872,11 +931,14 @@ export default function ThreeMazeScene({
     const startingPoint = propsRef.current.phase === "moving"
       ? new THREE.Vector3()
       : propsRef.current.phase === "chest" && propsRef.current.previous
-        ? rotatedDirectionPoint(propsRef.current.previous, 1.95, orientationFor(propsRef.current.previous))
-        : directionPoint("south", 3.05);
+        ? directionPoint(propsRef.current.previous, 1.95)
+        : directionPoint(
+            propsRef.current.previous ? reverseDirection[propsRef.current.previous] : "south",
+            3.05,
+          );
     explorer.position.copy(startingPoint);
     explorer.position.y = 0.1;
-    explorer.rotation.y = directionAngles.north;
+    explorer.rotation.y = directionAngles[propsRef.current.previous ?? "north"];
     const fireflies: SceneAssets["fireflies"] = [];
     const fireflyColors = ["#ffdf8c", "#d7f3b5", "#fff0ba"];
     for (let i = 0; i < 24; i++) {
@@ -951,7 +1013,6 @@ export default function ThreeMazeScene({
       movement: null,
       suspenseStartedAt: null,
       chestPickedUp: false,
-      orientationAngle: orientationFor(propsRef.current.previous),
       routeIndicatorElements: routeIndicatorElementsRef.current,
     };
     assetsRef.current = assets;
@@ -968,6 +1029,7 @@ export default function ThreeMazeScene({
     const hemiColor = new THREE.Color();
     const groundColor = new THREE.Color();
     const sunColor = new THREE.Color();
+    const chestPosition = new THREE.Vector3();
     const animate = () => {
       assets.animationFrame = window.requestAnimationFrame(animate);
       elapsed += 0.01;
@@ -989,16 +1051,22 @@ export default function ThreeMazeScene({
         assets.explorer.position.lerpVectors(movement.from, movement.to, eased);
         assets.explorer.position.y = 0.1 + Math.sin(progress * Math.PI) * 0.1;
         assets.explorer.rotation.y = movement.facing;
-        const chestOnPath = current.previous && current.junction.chests[current.previous];
-        if (chestOnPath && !assets.chestPickedUp && progress >= 0.6) {
-          assets.chestPickedUp = true;
+        const selectedDirection = current.phase === "moving" ? current.previous : undefined;
+        const chestOnPath = selectedDirection ? current.junction.chests[selectedDirection] : undefined;
+        if (chestOnPath && !assets.chestPickedUp) {
           const chest = assets.chests.children.find(
-            (entry) => entry.userData.direction === current.previous,
+            (entry) => entry.userData.direction === selectedDirection,
           );
           if (chest instanceof THREE.Group) {
-            recycleChest(chest, assets.chests, assets.chestPoolGroup, assets.chestPool);
+            chest.getWorldPosition(chestPosition);
+            const dx = assets.explorer.position.x - chestPosition.x;
+            const dz = assets.explorer.position.z - chestPosition.z;
+            if (dx * dx + dz * dz <= 0.65 * 0.65) {
+              assets.chestPickedUp = true;
+              recycleChest(chest, assets.chests, assets.chestPoolGroup, assets.chestPool);
+              current.onChestReached();
+            }
           }
-          current.onChestReached();
         }
         if (progress >= 1) {
           assets.explorer.position.copy(movement.to);
@@ -1024,22 +1092,36 @@ export default function ThreeMazeScene({
       current.junction.options.forEach((direction) => {
         const indicator = assets.routeIndicatorElements[direction];
         if (!indicator) return;
-        indicatorPosition.copy(directionPoint(direction, 6.25));
+        const wager = current.bets[direction] ?? 0;
+        indicator.classList.toggle("scene-route-indicator-selected", wager > 0);
+        const previousWager = indicator.dataset.betCount;
+        if (previousWager === undefined) {
+          indicator.dataset.betCount = String(wager);
+        } else {
+          if (wager > Number(previousWager)) {
+            indicator.classList.remove("scene-route-indicator-pop");
+            void indicator.offsetWidth;
+            indicator.classList.add("scene-route-indicator-pop");
+          }
+          if (wager !== Number(previousWager)) indicator.dataset.betCount = String(wager);
+        }
+        indicatorPosition.copy(directionPoint(direction, ROUTE_INDICATOR_DISTANCE));
         indicatorPosition.y = 0.65;
         assets.dynamic.localToWorld(indicatorPosition);
         indicatorPosition.project(camera);
-        const margin = 48;
+        const horizontalMargin = 72;
+        const verticalMargin = 48;
         const x = (indicatorPosition.x * 0.5 + 0.5) * indicatorRect.width;
         const y = (-indicatorPosition.y * 0.5 + 0.5) * indicatorRect.height;
-        const clampedX = Math.max(margin, Math.min(indicatorRect.width - margin, x));
-        const minY = Math.max(margin, (shortcutsBottom ?? 0) - indicatorRect.top + 18);
-        const maxY = Math.max(minY, Math.min(indicatorRect.height - margin, (panelTop ?? indicatorRect.bottom) - indicatorRect.top - 38));
+        const clampedX = Math.max(horizontalMargin, Math.min(indicatorRect.width - horizontalMargin, x));
+        const minY = Math.max(verticalMargin, (shortcutsBottom ?? 0) - indicatorRect.top + 18);
+        const maxY = Math.max(minY, Math.min(indicatorRect.height - verticalMargin, (panelTop ?? indicatorRect.bottom) - indicatorRect.top - 38));
         const clampedY = Math.max(minY, Math.min(maxY, y));
-        const edge = x < margin ? "◀" : x > indicatorRect.width - margin ? "▶" : y < minY ? "▲" : y > maxY ? "▼" : "";
+        const edge = x < horizontalMargin ? "◀" : x > indicatorRect.width - horizontalMargin ? "▶" : y < minY ? "▲" : y > maxY ? "▼" : "";
         indicator.style.left = `${clampedX}px`;
         indicator.style.top = `${clampedY}px`;
         indicator.dataset.edge = edge;
-        indicator.style.visibility = indicatorPosition.z >= -1 && indicatorPosition.z <= 1 ? "visible" : "hidden";
+        indicator.style.visibility = "visible";
       });
       const cycleMs = 660_000;
       const clockTime = ((Date.now() - current.worldClockStartedAt) % cycleMs + cycleMs) % cycleMs;
@@ -1122,9 +1204,8 @@ export default function ThreeMazeScene({
       });
     }
     const cameFrom = previous ? reverseDirection[previous] : "south";
-    assets.orientationAngle = orientationFor(previous);
-    assets.paths.rotation.y = assets.orientationAngle;
-    assets.dynamic.rotation.y = assets.orientationAngle;
+    assets.paths.rotation.y = 0;
+    assets.dynamic.rotation.y = 0;
     for (const direction of directions) {
       buildPath(assets.paths, direction, nextJunction.options.includes(direction) || direction === cameFrom, biome);
     }
@@ -1142,15 +1223,16 @@ export default function ThreeMazeScene({
         direction as Direction,
         chest,
         assets.chestIconTextures,
+        chestDistance(direction as Direction, propsRef.current.previous),
       );
     }
-    assets.chests.rotation.y = assets.orientationAngle;
+    assets.chests.rotation.y = 0;
     const selectedChest = propsRef.current.previous;
     assets.chests.children.forEach((chest) => {
       chest.visible = !(propsRef.current.phase === "chest" && chest.userData.direction === selectedChest);
     });
-    buildMarkers(assets.dynamic, nextJunction, propsRef.current.bets, assets.markerMeshes);
-  }, [junction.id, junction.options, junction.hazards, junction.chests]);
+    buildMarkers(assets.dynamic, nextJunction, propsRef.current.bets, previous, assets.markerMeshes);
+  }, [junction.id, junction.options, junction.hazards, junction.chests, previous]);
 
   useEffect(() => {
     const assets = assetsRef.current;
@@ -1184,19 +1266,27 @@ export default function ThreeMazeScene({
     if (phase === "moving" && previous) {
       const suspenseStartedAt = assets.suspenseStartedAt ?? now - 2600;
       assets.suspenseStartedAt = suspenseStartedAt;
+      const reachesTrap = propsRef.current.junction.hazards.includes(previous);
       assets.movement = {
         from: assets.explorer.position.clone(),
-        to: rotatedDirectionPoint(previous, 3.05, assets.orientationAngle),
+        to: directionPoint(
+          previous,
+          reachesTrap
+            ? TRAP_DISTANCE
+            : propsRef.current.junction.chests[previous] && propsRef.current.junction.id === 0 && previous === "south"
+              ? ENTRY_CHEST_DISTANCE + 0.7
+              : 3.05,
+        ),
         startedAt: now,
         duration: 2100,
-        facing: directionAngles[previous] + assets.orientationAngle,
+        facing: directionAngles[previous],
       };
       return;
     }
     if (phase === "result" || phase === "choosing" || phase === "walking" || phase === "idle") {
-      const entrance = directionPoint("south", 3.05);
+      const entrance = directionPoint(previous ? reverseDirection[previous] : "south", 3.05);
       assets.explorer.position.set(entrance.x, 0.1, entrance.z);
-      assets.explorer.rotation.y = directionAngles.north;
+      assets.explorer.rotation.y = directionAngles[previous ?? "north"];
       assets.movement = null;
       assets.suspenseStartedAt = null;
     }
@@ -1252,20 +1342,27 @@ export default function ThreeMazeScene({
       </div>
       <div className="scene-three" ref={containerRef} aria-label="Three-dimensional labyrinth">
         <div className="scene-route-indicators" aria-hidden="true">
-          {junction.options.map((direction, index) => (
+          {junction.options.map((direction) => {
+            return (
             <span
               key={direction}
               className="scene-route-indicator"
+              onAnimationEnd={(event) => {
+                if (event.animationName === "route-indicator-pop") {
+                  event.currentTarget.classList.remove("scene-route-indicator-pop");
+                }
+              }}
               ref={(element) => {
                 if (element) routeIndicatorElementsRef.current[direction] = element;
                 else delete routeIndicatorElementsRef.current[direction];
               }}
             >
-              <span className="scene-route-letter">{String.fromCharCode(65 + index)}</span>
+              <span className="scene-route-letter">{directionLabels[direction]}</span>
               <span>{direction}</span>
               <span className="scene-route-edge" />
             </span>
-          ))}
+            );
+          })}
         </div>
       </div>
       {graphicsError && (
