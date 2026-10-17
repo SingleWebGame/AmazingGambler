@@ -84,6 +84,7 @@ type GameState = {
 };
 
 const SESSION_KEY = "amazing-gambler-forever-session";
+const DAILY_RESET_GRANT_KEY = "amazing-gambler-daily-reset-grant-v1";
 const DAILY_ALLOWANCE = 100;
 const WORLD_DAY_MS = 5 * 60 * 1000;
 const WORLD_TRANSITION_MS = 30 * 1000;
@@ -903,16 +904,30 @@ export default function Game() {
     setOwnedCharacterIds(restoredOwnedIds);
     const restored = loadForeverSession();
     const today = dayIndex();
+    let resetGrant = 0;
+    try {
+      if (window.localStorage.getItem(DAILY_RESET_GRANT_KEY) !== "claimed") {
+        window.localStorage.setItem(DAILY_RESET_GRANT_KEY, "claimed");
+        resetGrant = DAILY_ALLOWANCE;
+      }
+    } catch (error) {
+      console.error("Unable to claim the one-time daily coin reset.", error);
+      setToast("Your daily coin bonus could not be saved on this device.");
+    }
     if (restored) {
       const elapsedDays = Math.max(0, today - (restored.dailyClaimDay ?? today));
       game.set({
         ...restored,
-        money: (restored.money ?? 100) + elapsedDays * DAILY_ALLOWANCE,
+        money: (restored.money ?? DAILY_ALLOWANCE) + elapsedDays * DAILY_ALLOWANCE + resetGrant,
         dailyClaimDay: today,
         progress: loadProgress(),
       });
     } else {
-      game.set({ dailyClaimDay: today, progress: loadProgress() });
+      game.set({ money: game.money + resetGrant, dailyClaimDay: today, progress: loadProgress() });
+    }
+    if (resetGrant > 0) {
+      setToast(`Daily reset bonus: +${resetGrant} coins added to your pouch.`);
+      window.setTimeout(() => setToast(""), 3600);
     }
     setTurnResult(restored?.lastReport ?? null);
     try {
