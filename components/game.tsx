@@ -887,6 +887,7 @@ export default function Game() {
   const equippedIcon = cosmeticDefinitions.find((cosmetic) => cosmetic.id === equipped.icon)?.icon;
   const equippedBadge = cosmeticDefinitions.find((cosmetic) => cosmetic.id === equipped.badge);
   const currentOptions = game.junction.options;
+  const isRunPlaying = game.phase === "walking" || game.phase === "approaching" || game.phase === "moving" || game.phase === "chest";
   const optionNames = currentOptions.map((direction) => {
     return { direction, label: directionLabels[direction] };
   });
@@ -1640,7 +1641,7 @@ export default function Game() {
         </button>
       </div>
 
-      <section className="next-junction-panel glass-panel" aria-label="Choose the explorer's path">
+      <section className={`next-junction-panel glass-panel ${isRunPlaying ? "next-junction-panel-fading" : ""}`} aria-label="Choose the explorer's path" aria-hidden={isRunPlaying}>
         <div className="junction-panel-heading">
           <div>
             <span className="junction-kicker">THE NEXT JUNCTION <i>·</i> {currentOptions.length} paths ahead</span>

@@ -853,6 +853,12 @@ body {
   padding: 17px 18px 13px;
   border-radius: 21px;
   transform: translateX(-50%);
+  transition: opacity .35s ease, transform .35s ease;
+}
+.next-junction-panel-fading {
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 16px);
 }
 .junction-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .junction-kicker { display: block; color: #e0c783; font-size: 8px; letter-spacing: 1.1px; }
