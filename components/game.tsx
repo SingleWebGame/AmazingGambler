@@ -696,7 +696,7 @@ function TutorialModal({ onClose }: { onClose: () => void }) {
         <p id="tutorial-description" className="tutorial-intro">Read the crossroads, predict the explorer&apos;s next move, and learn what every part of the maze does. This guide is always available from the ? button.</p>
         <ol className="tutorial-steps">
           <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. After the opening four rooms, a spiked trap on a path marks a risky route: it can cost coins and Luck, but pays 3× when your prediction is right. Your first four predictions are guaranteed wins while you meet the explorer crew.</p></div></li>
-          <li><span>2</span><div><strong>Place your virtual coins</strong><p>Each tap adds 1 coin to a path; press and hold to add faster. Use Undo last coin to take back one. Your wager is split across the paths you chose.</p></div></li>
+          <li><span>2</span><div><strong>Place your virtual coins</strong><p>Each tap adds 1 coin to a path; press and hold to add faster. Tap Undo last coin to take back one, or press and hold to remove coins faster. Your wager is split across the paths you chose.</p></div></li>
           <li><span>3</span><div><strong>Watch destiny unfold</strong><p>After you press Watch the turn, the explorer approaches, the camera zooms, then the random path is revealed. Correct predictions pay 2×, or 3× on a risky path. Read the turn report before continuing.</p></div></li>
           <li><span>4</span><div><strong>Find a chest on the path</strong><p>Each route can hide one chest, placed before your prediction. Coin chests hold 10–1,000 coins; rare violet character chests unlock collectible explorers. The first three chests introduce Moussa Kane, Aissatou Cisse, and Cheikh Thiam. Chest contents are revealed as soon as the explorer reaches them.</p></div></li>
           <li><span>5</span><div><strong>Your forever adventure</strong><p>Progress saves on this device and the maze keeps going. A daily pouch adds 100 free coins each new day; if you run out, wait for it to arrive.</p></div></li>
@@ -809,6 +809,7 @@ export default function Game() {
   const [worldPhase, setWorldPhase] = useState("DAY");
   const worldClockStartedAtRef = useRef<number | null>(null);
   const heldPathRef = useRef<{ direction: Direction; startedAt: number; timer: number } | null>(null);
+  const heldUndoRef = useRef<{ startedAt: number; timer: number } | null>(null);
   const lastPlacedDirectionRef = useRef<Direction | null>(null);
   const chestRevealPausedRef = useRef(false);
   const addBetRef = useRef<(direction: Direction, amount?: number) => void>(() => {});
@@ -851,7 +852,7 @@ export default function Game() {
       if (!(event.target instanceof Element)) return;
       const target = event.target.closest("button, a, label, [role='button'], .modal-backdrop");
       if (!target || !main.contains(target) || target.matches(":disabled, [aria-disabled='true'], [data-sound-toggle]")) return;
-      if (target.classList.contains("route-option")) return;
+      if (target.classList.contains("route-option") || target.classList.contains("undo-hold-button")) return;
       const requestedSound = target.getAttribute("data-sound");
       playGameSound(isGameSound(requestedSound) ? requestedSound : "ui");
     };
@@ -1120,7 +1121,9 @@ export default function Game() {
   useEffect(() => {
     const stopHolding = () => {
       if (heldPathRef.current) window.clearTimeout(heldPathRef.current.timer);
+      if (heldUndoRef.current) window.clearTimeout(heldUndoRef.current.timer);
       heldPathRef.current = null;
+      heldUndoRef.current = null;
     };
     window.addEventListener("pointerup", stopHolding);
     window.addEventListener("pointercancel", stopHolding);
@@ -1199,16 +1202,20 @@ export default function Game() {
   };
 
   const addBet = (direction: Direction, amount = 1) => {
-    if (game.phase !== "choosing") return;
-    const current = game.bets[direction];
-    if (current === 0 && selectedCount >= 2) {
+    const currentGame = useGame.getState();
+    if (currentGame.phase !== "choosing") return;
+    const currentBets = currentGame.bets;
+    const currentTotal = Object.values(currentBets).reduce((sum, value) => sum + value, 0);
+    const currentSelectedCount = Object.values(currentBets).filter((value) => value > 0).length;
+    const current = currentBets[direction];
+    if (current === 0 && currentSelectedCount >= 2) {
       if (!toast) {
         setToast("You can back up to two paths at each junction.");
         window.setTimeout(() => setToast(""), 2400);
       }
       return;
     }
-    const available = Math.max(0, game.money - totalBet);
+    const available = Math.max(0, currentGame.money - currentTotal);
     if (!available) {
       if (!toast) {
         setToast(`No coins left. Your daily pouch arrives in ${dailyCountdown || "a little while"}.`);
@@ -1216,9 +1223,9 @@ export default function Game() {
       }
       return;
     }
-    const next = Math.min(game.money - (totalBet - current), current + Math.min(amount, available));
+    const next = Math.min(currentGame.money - (currentTotal - current), current + Math.min(amount, available));
     lastPlacedDirectionRef.current = direction;
-    const nextBets = { ...game.bets, [direction]: next };
+    const nextBets = { ...currentBets, [direction]: next };
     playGameSound("coin");
     game.set({ bets: nextBets });
   };
@@ -1228,14 +1235,17 @@ export default function Game() {
   const startPathHold = (direction: Direction) => {
     if (game.phase !== "choosing") return;
     if (heldPathRef.current) window.clearTimeout(heldPathRef.current.timer);
+    if (heldUndoRef.current) window.clearTimeout(heldUndoRef.current.timer);
+    heldUndoRef.current = null;
     addBetRef.current(direction, 1);
     const hold = { direction, startedAt: Date.now(), timer: 0 };
     heldPathRef.current = hold;
     const repeat = () => {
       if (heldPathRef.current !== hold) return;
-      addBetRef.current(direction, 1);
       const heldFor = Date.now() - hold.startedAt;
-      const delay = Math.max(70, 280 - Math.floor(heldFor / 700) * 35);
+      const amount = 2 ** Math.floor(heldFor / 1000);
+      addBetRef.current(direction, amount);
+      const delay = Math.max(35, 280 * 0.75 ** Math.floor(heldFor / 700));
       hold.timer = window.setTimeout(repeat, delay);
     };
     hold.timer = window.setTimeout(repeat, 420);
@@ -1246,17 +1256,51 @@ export default function Game() {
     heldPathRef.current = null;
   };
 
-  const undoLastCoin = () => {
-    if (game.phase !== "choosing") return;
-    const direction = lastPlacedDirectionRef.current && game.bets[lastPlacedDirectionRef.current] > 0
-      ? lastPlacedDirectionRef.current
-      : currentOptions.find((option) => game.bets[option] > 0);
-    if (!direction) return;
-    const next = { ...game.bets, [direction]: Math.max(0, game.bets[direction] - 1) };
-    if (next[direction] === 0) {
-      lastPlacedDirectionRef.current = currentOptions.find((option) => next[option] > 0) ?? null;
+  const undoLastCoin = (amount = 1) => {
+    const current = useGame.getState();
+    if (current.phase !== "choosing") return;
+    const options = current.junction.options;
+    const next = { ...current.bets };
+    let remaining = Math.min(amount, options.reduce((sum, direction) => sum + next[direction], 0));
+    if (remaining <= 0) return;
+    while (remaining > 0) {
+      const direction = lastPlacedDirectionRef.current && next[lastPlacedDirectionRef.current] > 0
+        ? lastPlacedDirectionRef.current
+        : options.find((option) => next[option] > 0);
+      if (!direction) break;
+      const removed = Math.min(remaining, next[direction]);
+      next[direction] -= removed;
+      remaining -= removed;
+      if (next[direction] === 0) {
+        lastPlacedDirectionRef.current = options.find((option) => next[option] > 0) ?? null;
+      }
     }
+    playGameSound("undo");
     game.set({ bets: next });
+  };
+
+  const startUndoHold = () => {
+    if (game.phase !== "choosing") return;
+    if (heldUndoRef.current) window.clearTimeout(heldUndoRef.current.timer);
+    if (heldPathRef.current) window.clearTimeout(heldPathRef.current.timer);
+    heldPathRef.current = null;
+    undoLastCoin();
+    const hold = { startedAt: Date.now(), timer: 0 };
+    heldUndoRef.current = hold;
+    const repeat = () => {
+      if (heldUndoRef.current !== hold) return;
+      const heldFor = Date.now() - hold.startedAt;
+      const amount = 2 ** Math.floor(heldFor / 1000);
+      undoLastCoin(amount);
+      const delay = Math.max(35, 280 * 0.75 ** Math.floor(heldFor / 700));
+      hold.timer = window.setTimeout(repeat, delay);
+    };
+    hold.timer = window.setTimeout(repeat, 420);
+  };
+
+  const stopUndoHold = () => {
+    if (heldUndoRef.current) window.clearTimeout(heldUndoRef.current.timer);
+    heldUndoRef.current = null;
   };
 
   const resolveRound = () => {
@@ -1606,7 +1650,7 @@ export default function Game() {
           <div className="stake-summary">
             <span>ON THE LINE</span>
             <strong title={`${totalBet.toLocaleString()} coins`}><span className="mini-coin">$</span>{formatCoinBalance(totalBet)}</strong>
-            {totalBet > 0 && <button data-sound="undo" onClick={undoLastCoin} disabled={game.phase !== "choosing"} aria-label="Undo the last coin placed"><Icon name="undo" size={13} /><span>Undo last coin</span></button>}
+            {totalBet > 0 && <button className="undo-hold-button" onPointerDown={(event) => { if (event.button === 0) startUndoHold(); }} onPointerLeave={stopUndoHold} onClick={(event) => { if (event.detail === 0) undoLastCoin(); }} disabled={game.phase !== "choosing"} title="Tap to undo one coin; press and hold to undo faster" aria-label="Undo the last coin placed; press and hold to remove coins faster"><Icon name="undo" size={13} /><span>Undo last coin</span></button>}
           </div>
         </div>
         <div className={`route-options options-${currentOptions.length}`}>
