@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Amazing Gambler — Predict the Path",
   description:
-    "A hand-drawn labyrinth of lucky guesses. Watch the explorer, read the paths, and trust your instincts.",
+    "A cozy low-poly labyrinth of lucky guesses. Read the paths, guide your forever adventure, and collect daily virtual coins.",
   applicationName: "Amazing Gambler",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#f5efdf",
+  themeColor: "#101b1b",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",

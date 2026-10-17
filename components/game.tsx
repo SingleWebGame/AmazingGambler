@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
+import ThreeMazeScene from "./three-maze-scene";
 import {
   cosmeticDefinitions,
   createJunction,
@@ -23,9 +24,30 @@ import {
   type Progress,
 } from "@/lib/game";
 
-type Phase = "walking" | "choosing" | "moving" | "fallen" | "idle";
+type Phase = "walking" | "choosing" | "approaching" | "moving" | "result" | "idle";
 type TrailNode = { x: number; y: number; id: number; event?: EventKind; icon?: string };
 type BetMap = Record<Direction, number>;
+type TurnReport = {
+  room: number;
+  actualDirection: Direction;
+  placedBets: Partial<BetMap>;
+  totalStake: number;
+  hit: boolean;
+  risky: boolean;
+  pathReward: number;
+  chestReward: number;
+  fortuneBonus: number;
+  chestName?: string;
+  itemName?: string;
+  itemLuckGain: number;
+  trapName?: string;
+  trapPenalty: number;
+  trapCaught: boolean;
+  luckBefore: number;
+  luckAfter: number;
+  balanceBefore: number;
+  balanceAfter: number;
+};
 type GameState = {
   money: number;
   run: number;
@@ -41,8 +63,145 @@ type GameState = {
   event: EventKind | null;
   overflow: boolean;
   chestCount: number;
+  dailyClaimDay: number;
+  lastReport: TurnReport | null;
   set: (values: Partial<GameState>) => void;
 };
+
+const SESSION_KEY = "amazing-gambler-forever-session";
+const DAILY_ALLOWANCE = 100;
+const WORLD_DAY_MS = 5 * 60 * 1000;
+const WORLD_TRANSITION_MS = 30 * 1000;
+const WORLD_NIGHT_MS = 5 * 60 * 1000;
+const WORLD_CYCLE_MS = WORLD_DAY_MS + WORLD_TRANSITION_MS + WORLD_NIGHT_MS + WORLD_TRANSITION_MS;
+const dayIndex = (date = new Date()) =>
+  Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000);
+const worldPhaseLabel = (startedAt: number, now = Date.now()) => {
+  const time = ((now - startedAt) % WORLD_CYCLE_MS + WORLD_CYCLE_MS) % WORLD_CYCLE_MS;
+  if (time < WORLD_DAY_MS) return "DAY";
+  if (time < WORLD_DAY_MS + WORLD_TRANSITION_MS) return "DUSK";
+  if (time < WORLD_DAY_MS + WORLD_TRANSITION_MS + WORLD_NIGHT_MS) return "NIGHT";
+  return "DAWN";
+};
+const formatCoinBalance = (amount: number) =>
+  new Intl.NumberFormat("en", {
+    notation: amount < 1_000_000 ? "standard" : "compact",
+    maximumFractionDigits: amount < 1_000_000 ? 0 : 1,
+  }).format(amount);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const isDirection = (value: unknown): value is Direction =>
+  value === "north" || value === "east" || value === "south" || value === "west";
+const isEventKind = (value: unknown): value is EventKind =>
+  value === "chest" || value === "item" || value === "trap" || value === "quiet";
+
+function loadForeverSession(): Partial<GameState> | null {
+  try {
+    const raw = window.localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value)) throw new Error("Saved adventure is not an object.");
+    const options = isRecord(value.junction) && Array.isArray(value.junction.options)
+      ? value.junction.options.filter(isDirection)
+      : [];
+    const hazards = isRecord(value.junction) && Array.isArray(value.junction.hazards)
+      ? value.junction.hazards.filter(isDirection)
+      : [];
+    const junctionId = isRecord(value.junction) && Number.isFinite(value.junction.id)
+      ? Number(value.junction.id)
+      : 0;
+    if (!options.length || !isRecord(value.bets) || !isRecord(value.stats) || !isRecord(value.explorer)) {
+      throw new Error("Saved adventure is missing required game state.");
+    }
+    const bets: BetMap = { north: 0, east: 0, south: 0, west: 0 };
+    for (const direction of Object.keys(bets) as Direction[]) {
+      const amount = value.bets[direction];
+      bets[direction] = Number.isFinite(amount) ? Math.max(0, Math.floor(Number(amount))) : 0;
+    }
+    const stats = Object.fromEntries(
+      Object.entries(value.stats).filter((entry): entry is [string, number] => Number.isFinite(entry[1])),
+    );
+    const trail = Array.isArray(value.trail)
+      ? value.trail.filter((node): node is TrailNode =>
+          isRecord(node) && Number.isFinite(node.x) && Number.isFinite(node.y) && Number.isFinite(node.id),
+        ).slice(-300)
+      : [{ x: 0, y: 0, id: 0 }];
+    const progress = isRecord(value.progress)
+      ? { ...emptyProgress, ...Object.fromEntries(
+          Object.entries(value.progress).filter((entry): entry is [string, number] => Number.isFinite(entry[1])),
+        ) } as Progress
+      : { ...emptyProgress };
+    const reportValue = value.lastReport;
+    let lastReport: TurnReport | null = null;
+    if (isRecord(reportValue) && isDirection(reportValue.actualDirection) &&
+      isRecord(reportValue.placedBets) && ["room", "totalStake", "pathReward", "chestReward", "fortuneBonus", "itemLuckGain", "trapPenalty", "luckBefore", "luckAfter", "balanceBefore", "balanceAfter"].every((key) => Number.isFinite(reportValue[key]))) {
+      const placedBets: Partial<BetMap> = {};
+      for (const direction of Object.keys(bets) as Direction[]) {
+        if (Number.isFinite(reportValue.placedBets[direction])) {
+          placedBets[direction] = Number(reportValue.placedBets[direction]);
+        }
+      }
+      lastReport = {
+        room: Number(reportValue.room),
+        actualDirection: reportValue.actualDirection,
+        placedBets,
+        totalStake: Number(reportValue.totalStake),
+        hit: Boolean(reportValue.hit),
+        risky: Boolean(reportValue.risky),
+        pathReward: Number(reportValue.pathReward),
+        chestReward: Number(reportValue.chestReward),
+        fortuneBonus: Number(reportValue.fortuneBonus),
+        chestName: typeof reportValue.chestName === "string" ? reportValue.chestName : undefined,
+        itemName: typeof reportValue.itemName === "string" ? reportValue.itemName : undefined,
+        itemLuckGain: Number(reportValue.itemLuckGain),
+        trapName: typeof reportValue.trapName === "string" ? reportValue.trapName : undefined,
+        trapPenalty: Number(reportValue.trapPenalty),
+        trapCaught: Boolean(reportValue.trapCaught),
+        luckBefore: Number(reportValue.luckBefore),
+        luckAfter: Number(reportValue.luckAfter),
+        balanceBefore: Number(reportValue.balanceBefore),
+        balanceAfter: Number(reportValue.balanceAfter),
+      };
+    }
+    return {
+      money: Number.isFinite(value.money) ? Math.max(0, Math.floor(Number(value.money))) : 100,
+      run: Number.isFinite(value.run) ? Math.max(0, Math.floor(Number(value.run))) : 0,
+      stats,
+      phase: value.phase === "result" && lastReport
+        ? "result"
+        : value.phase === "walking" || value.phase === "approaching" || value.phase === "moving"
+          ? value.phase
+          : "choosing",
+      junction: { id: junctionId, options, hazards },
+      previous: isDirection(value.previous) ? value.previous : undefined,
+      explorer: {
+        x: Number.isFinite(value.explorer.x) ? Number(value.explorer.x) : 0,
+        y: Number.isFinite(value.explorer.y) ? Number(value.explorer.y) : 0,
+      },
+      trail,
+      bets,
+      progress,
+      message: typeof value.message === "string" ? value.message : "The adventure continues.",
+      event: isEventKind(value.event) ? value.event : null,
+      overflow: Boolean(value.overflow),
+      chestCount: Number.isFinite(value.chestCount) ? Math.max(0, Math.floor(Number(value.chestCount))) : 0,
+      dailyClaimDay: Number.isFinite(value.dailyClaimDay) ? Number(value.dailyClaimDay) : dayIndex(),
+      lastReport,
+    };
+  } catch (error) {
+    console.error("Unable to restore the ongoing adventure.", error);
+    return null;
+  }
+}
+
+function saveForeverSession(game: GameState) {
+  try {
+    const { set: _set, ...session } = game;
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch (error) {
+    console.error("Unable to save the ongoing adventure.", error);
+  }
+}
 
 const useGame = create<GameState>((set) => ({
   money: 100,
@@ -58,6 +217,8 @@ const useGame = create<GameState>((set) => ({
   event: null,
   overflow: false,
   chestCount: 0,
+  dailyClaimDay: dayIndex(),
+  lastReport: null,
   set: (values) => set(values),
 }));
 
@@ -68,7 +229,6 @@ const characters = [
   { name: "Orbit", color: "#93b9d2", face: "👩‍🚀" },
 ];
 
-const startBet = 10;
 const reverseDirection: Record<Direction, Direction> = {
   north: "south",
   east: "west",
@@ -82,6 +242,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   const paths: Record<string, React.ReactNode> = {
     coin: <><circle cx="12" cy="12" r="9" /><path d="M15 8.5c-.7-.8-1.7-1.2-3-1.2-1.7 0-2.8.8-2.8 2 0 3 6 1.5 6 4.4 0 1.3-1.2 2.2-3 2.2-1.4 0-2.6-.5-3.4-1.4M12 5.5v13" /></>,
+    undo: <><path d="M3 7v6h6" /><path d="M5.2 12a7.5 7.5 0 1 1 1.9 5.1" /></>,
     upload: <><path d="M12 16V4m-4 4 4-4 4 4" /><path d="M4 16v4h16v-4" /></>,
     arrow: <><path d="M5 12h14m-6-6 6 6-6 6" /></>,
     treasure: <><path d="M4 10h16v10H4zM3 6h18v4H3z" /><path d="M12 6v14m-3-14c-3 0-3-4 0-4 2 0 3 4 3 4m3 0c3 0 3-4 0-4-2 0-3 4-3 4" /></>,
@@ -89,7 +250,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
   return <svg {...common}>{paths[name]}</svg>;
 }
 
-function MazeScene({
+function LegacyMazeScene({
   game,
   avatar,
   onChoosePath,
@@ -228,7 +389,7 @@ function MazeScene({
             width="66"
             height="66"
             filter="url(#avatar-shadow)"
-            className={`explorer-sprite ${game.phase === "moving" ? "explorer-moving" : game.phase === "walking" ? "explorer-walking" : ""} ${game.phase === "fallen" ? "explorer-fallen" : ""}`}
+            className={`explorer-sprite ${game.phase === "moving" ? "explorer-moving" : game.phase === "walking" ? "explorer-walking" : ""}`}
           />
         </g>
       </svg>
@@ -237,6 +398,43 @@ function MazeScene({
         <span className="caption-mystery">The maze only reveals what you&apos;ve earned.</span>
       </div>
     </div>
+  );
+}
+
+function MazeScene({
+  game,
+  avatar,
+  onPathHoldStart,
+  theme,
+  trail,
+  frame,
+  worldClockStartedAt,
+  worldPhase,
+}: {
+  game: GameState;
+  avatar: string;
+  onPathHoldStart: (direction: Direction) => void;
+  theme: string;
+  trail: string;
+  frame: string;
+  worldClockStartedAt: number;
+  worldPhase: string;
+}) {
+  return (
+    <ThreeMazeScene
+      junction={game.junction}
+      explorer={game.explorer}
+      phase={game.phase}
+      previous={game.previous}
+      bets={game.bets}
+      avatar={avatar}
+      onPathHoldStart={onPathHoldStart}
+      theme={theme}
+      trail={trail}
+      frame={frame}
+      worldClockStartedAt={worldClockStartedAt}
+      worldPhase={worldPhase}
+    />
   );
 }
 
@@ -289,16 +487,20 @@ function TutorialModal({ onClose }: { onClose: () => void }) {
         role="dialog"
         aria-modal="true"
       >
-        <span className="eyebrow">A QUICK NOTE BEFORE THE FIRST TURN</span>
+        <span className="eyebrow">YOUR GUIDE TO THE FOREVER MAZE</span>
         <h2 id="tutorial-title">How to play</h2>
-        <p id="tutorial-description" className="tutorial-intro">Watch the explorer reach a junction. Then trust your hunch about where they&apos;ll go.</p>
+        <p id="tutorial-description" className="tutorial-intro">Read the crossroads, predict the explorer&apos;s next move, and learn what every part of the maze does. This guide is always available from the ? button.</p>
         <ol className="tutorial-steps">
-          <li><span>1</span><div><strong>Read the paths</strong><p>Look at the open routes in the maze. Risky paths are marked.</p></div></li>
-          <li><span>2</span><div><strong>Choose one or two</strong><p>Tap up to two paths on the maze or in the junction panel.</p></div></li>
-          <li><span>3</span><div><strong>Set your practice-coin wager</strong><p>Lock it in and see where the explorer goes. Correct guesses win coins.</p></div></li>
+          <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. A risky marker warns that the route may bring a trap.</p></div></li>
+          <li><span>2</span><div><strong>Place your virtual coins</strong><p>Each tap adds 1 coin to a path; press and hold to add faster. Use Undo last coin to take back one. Your wager is split across the paths you chose.</p></div></li>
+          <li><span>3</span><div><strong>Watch destiny unfold</strong><p>After you press Watch the turn, the explorer approaches, the camera zooms, then the random path is revealed. Correct predictions pay 2×, or 3× on a risky path. Read the turn report before continuing.</p></div></li>
+          <li><span>4</span><div><strong>Find luck and trouble</strong><p>Chests award virtual coins, lucky items raise Luck, and traps can cost coins and Luck. Luck influences the chance of special events.</p></div></li>
+          <li><span>5</span><div><strong>Your forever adventure</strong><p>Progress saves on this device and the maze keeps going. A daily pouch adds 100 free coins each new day; if you run out, wait for it to arrive.</p></div></li>
+          <li><span>6</span><div><strong>Personalize your maze</strong><p>The Curio cabinet sells cosmetic keepsakes using virtual coins. Buy an item, then equip it. Frames, trails, themes, icons, and badges are visual only.</p></div></li>
+          <li><span>7</span><div><strong>Day turns to night</strong><p>In-game day and night each last 5 minutes, with a gentle 30-second transition between them. It only changes the scenery—not luck, paths, or rewards.</p></div></li>
         </ol>
-        <button className="tutorial-close-button" onClick={onClose}>Close tutorial &amp; start exploring</button>
-        <div className="modal-footnote">This quick tutorial is shown once on this device.</div>
+        <button className="tutorial-close-button" onClick={onClose}>Close guide &amp; keep exploring</button>
+        <div className="modal-footnote">A cozy game with virtual coins only—never real-money gambling.</div>
       </motion.section>
     </motion.div>
   );
@@ -384,16 +586,28 @@ export default function Game() {
   const [showPicker, setShowPicker] = useState(true);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialSeen, setTutorialSeen] = useState(false);
-  const wager = startBet;
   const [resultOpen, setResultOpen] = useState(false);
+  const [turnResult, setTurnResult] = useState<TurnReport | null>(null);
   const [shopOpen, setShopOpen] = useState(false);
   const [ownedCosmetics, setOwnedCosmetics] = useState<string[]>([]);
   const [equipped, setEquipped] = useState<Partial<Record<CosmeticCategory, string>>>({});
   const [toast, setToast] = useState("");
-  const movingRef = useRef<number | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [dailyCountdown, setDailyCountdown] = useState("");
+  const [worldClockStartedAt, setWorldClockStartedAt] = useState(0);
+  const [worldPhase, setWorldPhase] = useState("DAY");
+  const worldClockStartedAtRef = useRef<number | null>(null);
+  const heldPathRef = useRef<{ direction: Direction; startedAt: number; timer: number } | null>(null);
+  const lastPlacedDirectionRef = useRef<Direction | null>(null);
+  const addBetRef = useRef<(direction: Direction, amount?: number) => void>(() => {});
   const luck = game.stats.luck ?? 10;
   const selectedCount = Object.values(game.bets).filter((amount) => amount > 0).length;
   const totalBet = Object.values(game.bets).reduce((sum, amount) => sum + amount, 0);
+  const suspenseReport = (game.phase === "approaching" || game.phase === "moving") ? game.lastReport : null;
+  const displayMoney = suspenseReport?.balanceBefore ?? game.money;
+  const displayLuck = suspenseReport?.luckBefore ?? luck;
+  const displayRoom = suspenseReport?.room ?? game.run + 1;
+  const displayChests = game.chestCount - (suspenseReport?.chestName ? 1 : 0);
   const equippedIcon = cosmeticDefinitions.find((cosmetic) => cosmetic.id === equipped.icon)?.icon;
   const equippedBadge = cosmeticDefinitions.find((cosmetic) => cosmetic.id === equipped.badge);
   const currentOptions = game.junction.options;
@@ -404,7 +618,35 @@ export default function Game() {
   const avatarName = characterName;
 
   useEffect(() => {
-    game.set({ progress: loadProgress() });
+    const restored = loadForeverSession();
+    const today = dayIndex();
+    if (restored) {
+      const elapsedDays = Math.max(0, today - (restored.dailyClaimDay ?? today));
+      game.set({
+        ...restored,
+        money: (restored.money ?? 100) + elapsedDays * DAILY_ALLOWANCE,
+        dailyClaimDay: today,
+        progress: loadProgress(),
+      });
+    } else {
+      game.set({ dailyClaimDay: today, progress: loadProgress() });
+    }
+    setTurnResult(restored?.lastReport ?? null);
+    try {
+      const characterRaw = window.localStorage.getItem("amazing-gambler-forever-character");
+      if (characterRaw) {
+        const characterValue: unknown = JSON.parse(characterRaw);
+        if (isRecord(characterValue) && typeof characterValue.name === "string" &&
+          typeof characterValue.avatar === "string" && characterValue.avatar.length < 7_000_000) {
+          setCharacterName(characterValue.name);
+          setAvatar(characterValue.avatar);
+          setHasPickedCharacter(true);
+          setShowPicker(false);
+        }
+      }
+    } catch (error) {
+      console.error("Unable to restore your explorer.", error);
+    }
     try {
       setTutorialSeen(window.localStorage.getItem("amazing-gambler-tutorial-seen") === "true");
     } catch (error) {
@@ -426,7 +668,88 @@ export default function Game() {
     } catch (error) {
       console.error("Unable to load saved cosmetics.", error);
     }
+    setSessionReady(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!sessionReady) return;
+    saveForeverSession(game);
+  }, [
+    sessionReady,
+    game.money,
+    game.run,
+    game.stats,
+    game.phase,
+    game.junction,
+    game.previous,
+    game.explorer,
+    game.trail,
+    game.bets,
+    game.progress,
+    game.message,
+    game.event,
+    game.overflow,
+    game.chestCount,
+    game.dailyClaimDay,
+    game.lastReport,
+  ]);
+
+  useEffect(() => {
+    if (!sessionReady) return;
+    const updateDailyAllowance = () => {
+      const now = new Date();
+      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      const seconds = Math.max(0, Math.ceil((tomorrow.getTime() - now.getTime()) / 1000));
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const remainingSeconds = seconds % 60;
+      setDailyCountdown(`${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`);
+      const today = dayIndex(now);
+      if (today > useGame.getState().dailyClaimDay) {
+        const current = useGame.getState();
+        const elapsedDays = today - current.dailyClaimDay;
+        current.set({
+          money: current.money + elapsedDays * DAILY_ALLOWANCE,
+          dailyClaimDay: today,
+          message: `Your daily pouch arrived: +${(elapsedDays * DAILY_ALLOWANCE).toLocaleString()} coins.`,
+        });
+        setToast(`Your daily pouch arrived: +${(elapsedDays * DAILY_ALLOWANCE).toLocaleString()} coins.`);
+        window.setTimeout(() => setToast(""), 3500);
+      }
+    };
+    updateDailyAllowance();
+    const interval = window.setInterval(updateDailyAllowance, 1000);
+    return () => window.clearInterval(interval);
+  }, [sessionReady]);
+
+  useEffect(() => {
+    if (worldClockStartedAtRef.current === null) {
+      const now = Date.now();
+      let savedStart: number | null = null;
+      try {
+        const saved = window.localStorage.getItem("amazing-gambler-world-clock-start");
+        const parsed = saved === null ? NaN : Number(saved);
+        if (Number.isFinite(parsed) && parsed > 0 && parsed <= now) savedStart = parsed;
+      } catch (error) {
+        console.error("Unable to restore the in-game clock.", error);
+      }
+      const startedAt = savedStart ?? now;
+      worldClockStartedAtRef.current = startedAt;
+      if (savedStart === null) {
+        try {
+          window.localStorage.setItem("amazing-gambler-world-clock-start", String(startedAt));
+        } catch (error) {
+          console.error("Unable to save the in-game clock.", error);
+        }
+      }
+    }
+    const startedAt = worldClockStartedAtRef.current;
+    setWorldClockStartedAt(startedAt);
+    const updatePhase = () => setWorldPhase(worldPhaseLabel(startedAt));
+    updatePhase();
+    const timer = window.setInterval(updatePhase, 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -448,13 +771,44 @@ export default function Game() {
   }, []);
 
   useEffect(() => {
-    if (game.phase !== "walking") return;
-    const timer = window.setTimeout(() => game.set({ phase: "choosing", message: "Choose a path. Trust your gut." }), 1550);
-    return () => window.clearTimeout(timer);
-  }, [game.phase, game]);
+    if (game.phase === "walking") {
+      const timer = window.setTimeout(() => game.set({ phase: "choosing", message: "Choose a path. Trust your gut." }), 850);
+      return () => window.clearTimeout(timer);
+    }
+    if (game.phase === "approaching" && game.lastReport) {
+      const timer = window.setTimeout(() => {
+        game.set({ phase: "moving", previous: game.lastReport?.actualDirection });
+      }, 2600);
+      return () => window.clearTimeout(timer);
+    }
+    if (game.phase === "moving" && game.lastReport) {
+      const timer = window.setTimeout(() => {
+        const junction = createJunction(game.run, game.previous);
+        game.set({
+          phase: "result",
+          junction,
+          bets: { north: 0, east: 0, south: 0, west: 0 },
+          event: game.lastReport?.trapName ? "trap" : game.lastReport?.chestName ? "chest" : game.lastReport?.itemName ? "item" : null,
+        });
+      }, 2300);
+      return () => window.clearTimeout(timer);
+    }
+  }, [game.phase, game.run, game.previous, game.lastReport, game]);
 
-  useEffect(() => () => {
-    if (movingRef.current) clearTimeout(movingRef.current);
+  useEffect(() => {
+    const stopHolding = () => {
+      if (heldPathRef.current) window.clearTimeout(heldPathRef.current.timer);
+      heldPathRef.current = null;
+    };
+    window.addEventListener("pointerup", stopHolding);
+    window.addEventListener("pointercancel", stopHolding);
+    window.addEventListener("blur", stopHolding);
+    return () => {
+      stopHolding();
+      window.removeEventListener("pointerup", stopHolding);
+      window.removeEventListener("pointercancel", stopHolding);
+      window.removeEventListener("blur", stopHolding);
+    };
   }, []);
 
   const chooseCharacter = (name: string, image: string) => {
@@ -462,8 +816,14 @@ export default function Game() {
     setCharacterName(name);
     setHasPickedCharacter(true);
     setShowPicker(false);
+    try {
+      window.localStorage.setItem("amazing-gambler-forever-character", JSON.stringify({ name, avatar: image }));
+    } catch (error) {
+      console.error("Unable to save your explorer.", error);
+      setToast("Your explorer could not be saved on this device.");
+    }
     if (!tutorialSeen) setShowTutorial(true);
-    game.set({ phase: "walking" });
+    if (game.phase !== "result" && game.phase !== "approaching" && game.phase !== "moving") game.set({ phase: "walking" });
   };
 
   const closeTutorial = () => {
@@ -495,37 +855,71 @@ export default function Game() {
     reader.readAsDataURL(file);
   };
 
-  const addBet = (direction: Direction) => {
+  const addBet = (direction: Direction, amount = 1) => {
     if (game.phase !== "choosing") return;
     const current = game.bets[direction];
     if (current === 0 && selectedCount >= 2) {
-      setToast("You can choose up to two paths at each junction.");
-      window.setTimeout(() => setToast(""), 2400);
+      if (!toast) {
+        setToast("You can back up to two paths at each junction.");
+        window.setTimeout(() => setToast(""), 2400);
+      }
       return;
     }
-    const next = current > 0 ? 0 : Math.min(wager, Math.max(0, game.money - totalBet));
+    const available = Math.max(0, game.money - totalBet);
+    if (!available) {
+      if (!toast) {
+        setToast(`No coins left. Your daily pouch arrives in ${dailyCountdown || "a little while"}.`);
+        window.setTimeout(() => setToast(""), 3000);
+      }
+      return;
+    }
+    const next = Math.min(game.money - (totalBet - current), current + Math.min(amount, available));
+    lastPlacedDirectionRef.current = direction;
     const nextBets = { ...game.bets, [direction]: next };
-    game.set({
-      bets: nextBets,
-    });
+    game.set({ bets: nextBets });
   };
 
-  const adjustBet = (amount: number) => {
+  addBetRef.current = addBet;
+
+  const startPathHold = (direction: Direction) => {
     if (game.phase !== "choosing") return;
-    const chosen = currentOptions.find((direction) => game.bets[direction] > 0);
-    const direction = chosen ?? currentOptions[0];
+    if (heldPathRef.current) window.clearTimeout(heldPathRef.current.timer);
+    addBetRef.current(direction, 1);
+    const hold = { direction, startedAt: Date.now(), timer: 0 };
+    heldPathRef.current = hold;
+    const repeat = () => {
+      if (heldPathRef.current !== hold) return;
+      addBetRef.current(direction, 1);
+      const heldFor = Date.now() - hold.startedAt;
+      const delay = Math.max(70, 280 - Math.floor(heldFor / 700) * 35);
+      hold.timer = window.setTimeout(repeat, delay);
+    };
+    hold.timer = window.setTimeout(repeat, 420);
+  };
+
+  const stopPathHold = () => {
+    if (heldPathRef.current) window.clearTimeout(heldPathRef.current.timer);
+    heldPathRef.current = null;
+  };
+
+  const undoLastCoin = () => {
+    if (game.phase !== "choosing") return;
+    const direction = lastPlacedDirectionRef.current && game.bets[lastPlacedDirectionRef.current] > 0
+      ? lastPlacedDirectionRef.current
+      : currentOptions.find((option) => game.bets[option] > 0);
     if (!direction) return;
-    const otherBets = totalBet - game.bets[direction];
-    const next = Math.max(0, Math.min(game.money - otherBets, game.bets[direction] + amount));
-    game.set({
-      bets: { ...game.bets, [direction]: next },
-    });
+    const next = { ...game.bets, [direction]: Math.max(0, game.bets[direction] - 1) };
+    if (next[direction] === 0) {
+      lastPlacedDirectionRef.current = currentOptions.find((option) => next[option] > 0) ?? null;
+    }
+    game.set({ bets: next });
   };
 
   const resolveRound = () => {
-    if (!selectedCount || totalBet <= 0 || game.phase !== "choosing") {
-      setToast("Pick a path and add a wager first.");
-      window.setTimeout(() => setToast(""), 2200);
+    if (!selectedCount || totalBet <= 0 || game.phase !== "choosing" || totalBet > game.money) {
+      if (!game.money) setToast(`Your pouch is empty. Your daily +100 arrives in ${dailyCountdown || "a little while"}.`);
+      else setToast("Tap a path to place at least one coin first.");
+      window.setTimeout(() => setToast(""), 2800);
       return;
     }
     const options = game.junction.options;
@@ -541,16 +935,16 @@ export default function Game() {
       ? trapDefinitions[Math.floor(Math.random() * trapDefinitions.length)]
       : null;
     const oldLuck = luck;
+    const balanceBefore = game.money;
     let nextLuck = oldLuck;
-    let payout = 0;
+    let pathReward = 0;
     if (hit) {
-      payout += game.bets[actualDirection] * (dangerous ? 3 : 2);
+      pathReward = game.bets[actualDirection] * (dangerous ? 3 : 2);
       nextLuck += dangerous ? 22 : 7;
     } else {
       nextLuck = Math.max(0, nextLuck - 5);
     }
-    if (chest) payout += chest.reward;
-    if (predictedTrap) payout += 50;
+    let fortuneBonus = predictedTrap ? 50 : 0;
     const beforeItem = nextLuck;
     if (item) nextLuck = item.apply({ ...game.stats, luck: nextLuck }).luck;
     const itemLuckGain = item ? Math.max(0, nextLuck - beforeItem) : 0;
@@ -558,29 +952,54 @@ export default function Game() {
     const overflowArmed = game.overflow || oldLuck >= 100;
     const overflowActivated = overflowArmed && hit;
     if (overflowActivated) {
-      payout += 75;
+      fortuneBonus += 75;
       nextLuck = 5;
     }
     nextLuck = Math.min(100, Math.max(0, nextLuck));
     const survivalChance = trap
       ? Math.max(0.1, Math.min(.82, .36 + oldLuck / 300 - trap.survivalDifficulty))
       : 1;
-    const ended = trapEncounter && Math.random() > survivalChance;
-    if (trap && !ended) {
-      payout -= trap.moneyPenalty;
+    const trapCaught = trapEncounter && Math.random() > survivalChance;
+    const requestedTrapPenalty = trap ? trap.moneyPenalty + (trapCaught ? 10 : 0) : 0;
+    const balanceBeforeTrap = Math.max(0, balanceBefore - totalBet + pathReward + (chest?.reward ?? 0) + fortuneBonus);
+    const trapPenalty = Math.min(requestedTrapPenalty, balanceBeforeTrap);
+    if (trap) {
       nextLuck = Math.max(0, nextLuck - trap.luckPenalty);
     }
-    const nextMoney = Math.max(0, game.money - totalBet + payout - (ended ? 20 : 0));
+    const nextMoney = balanceBeforeTrap - trapPenalty;
+    const selectedBets: Partial<BetMap> = {};
+    for (const direction of Object.keys(game.bets) as Direction[]) {
+      if (game.bets[direction] > 0) selectedBets[direction] = game.bets[direction];
+    }
+    const report: TurnReport = {
+      room: game.run + 1,
+      actualDirection,
+      placedBets: selectedBets,
+      totalStake: totalBet,
+      hit,
+      risky: dangerous,
+      pathReward,
+      chestReward: chest?.reward ?? 0,
+      fortuneBonus,
+      chestName: chest?.label,
+      itemName: item?.name,
+      itemLuckGain,
+      trapName: trap?.label,
+      trapPenalty,
+      trapCaught,
+      luckBefore: oldLuck,
+      luckAfter: nextLuck,
+      balanceBefore,
+      balanceAfter: nextMoney,
+    };
     const nextRun = game.run + 1;
-    const resultMessage = ended
-      ? `Oh no—${characterName} stumbled into a trap. The journey ends here.`
+    const resultMessage = trapCaught
+      ? `${characterName} hit a ${trap?.label.toLowerCase()} trap, but the adventure goes on.`
       : hit
-        ? dangerous
-          ? `Brave call! The risky path paid off. +$${payout.toLocaleString()}`
-          : `A lovely guess. You found the right path! +$${payout.toLocaleString()}`
-        : `The explorer went another way. Better luck next turn.`;
+        ? `A lovely read. ${characterName} took ${directionNames[actualDirection]}.`
+        : `${characterName} chose ${directionNames[actualDirection]}. Read the turn report to see what changed.`;
     const nextProgress: Progress = {
-      totalEarned: game.progress.totalEarned + Math.max(0, payout),
+      totalEarned: game.progress.totalEarned + Math.max(0, pathReward + (chest?.reward ?? 0) + fortuneBonus),
       highestLuck: Math.max(game.progress.highestLuck, oldLuck, nextLuck),
       longestRun: Math.max(game.progress.longestRun, nextRun),
       chestsCollected: game.progress.chestsCollected + (chest ? 1 : 0),
@@ -593,66 +1012,26 @@ export default function Game() {
       x: game.explorer.x + vector.x,
       y: game.explorer.y + vector.y,
       id: nextRun,
-      event: ended ? "trap" : event,
-      icon: ended ? trap?.icon : chest?.id,
+      event: trapEncounter ? "trap" : event,
+      icon: trapEncounter ? trap?.icon : chest?.id,
     };
     const stepStats = { ...game.stats, luck: nextLuck };
+    setTurnResult(report);
     game.set({
       money: nextMoney,
       run: nextRun,
       stats: stepStats,
-      phase: ended ? "fallen" : "moving",
-      previous: actualDirection,
+      phase: "approaching",
       explorer: { x: node.x, y: node.y },
       trail: [...game.trail, node],
-      bets: { north: 0, east: 0, south: 0, west: 0 },
       progress: nextProgress,
-      message: overflowActivated ? `LUCK OVERFLOW! A fortune bonus +$75!` : resultMessage,
-      event: ended ? "trap" : event,
+      message: resultMessage,
+      event: trapEncounter ? "trap" : event,
       overflow: !overflowActivated && (overflowArmed || overflowReached),
       chestCount: game.chestCount + (chest ? 1 : 0),
+      lastReport: report,
     });
     saveProgress(nextProgress);
-    if (chest) {
-      setToast(`${chest.label}! +$${chest.reward.toLocaleString()}`);
-      window.setTimeout(() => setToast(""), 2400);
-    } else if (item) {
-      setToast(`${item.name}: +${itemLuckGain} Luck`);
-      window.setTimeout(() => setToast(""), 2400);
-    }
-    movingRef.current = window.setTimeout(() => {
-      if (ended) {
-        game.set({ phase: "fallen" });
-        return;
-      }
-      const junction = createJunction(nextRun, actualDirection);
-      game.set({
-        phase: "walking",
-        junction,
-        event: null,
-        overflow: false,
-        message: "Another junction. Read the signs...",
-      });
-    }, 1050);
-  };
-
-  const restartRun = () => {
-    const nextJunction = createJunction(0);
-    game.set({
-      money: Math.max(50, game.money),
-      run: 0,
-      stats: Object.fromEntries(statDefinitions.map((stat) => [stat.id, stat.initial])),
-      phase: "walking",
-      junction: nextJunction,
-      previous: undefined,
-      explorer: { x: 0, y: 0 },
-      trail: [{ x: 0, y: 0, id: 0 }],
-      bets: { north: 0, east: 0, south: 0, west: 0 },
-      message: "A fresh maze. A fresh fortune.",
-      event: null,
-      overflow: false,
-    });
-    setResultOpen(false);
   };
 
   const collectCosmetic = (id: string) => {
@@ -758,142 +1137,162 @@ export default function Game() {
   };
 
   const isDangerous = (direction: Direction) => game.junction.hazards.includes(direction);
-  const roundOutcome = useMemo(() => game.message, [game.message]);
+  const advanceAfterReport = () => {
+    setTurnResult(null);
+    game.set({
+      phase: "choosing",
+      lastReport: null,
+      message: "Choose a path. Trust your instincts.",
+    });
+  };
+  const resultPath = turnResult ? directionNames[turnResult.actualDirection] : "";
+  const netCoins = turnResult ? turnResult.balanceAfter - turnResult.balanceBefore : 0;
+  const predictedPaths = turnResult
+    ? (Object.entries(turnResult.placedBets) as [Direction, number][]).filter(([, amount]) => amount > 0)
+    : [];
 
   return (
-    <main className="game-shell">
-      <header className="topbar">
-        <a className="brand" href="/" aria-label="Amazing Gambler home">
-          <span className="brand-mark">{equippedIcon ?? "✳"}</span>
-          <span className="brand-name">AMAZING<br />GAMBLER</span>
-        </a>
-        <p className="tagline">Predict the Path. <span>Trust the Luck.</span> Win the Fortune.</p>
-        <div className="top-actions">
-          <PwaInstallButton />
-          <button className="profile-button" onClick={() => setShowPicker(true)} aria-label={`Change explorer, current character ${avatarName}`}>
-            <img src={avatar} alt="" /><span>{avatarName}</span><span className="profile-caret">⌄</span>
-          </button>
+    <main className="game-shell immersive-game">
+      <div className="immersive-scene">
+        <MazeScene
+          game={game}
+          avatar={avatar}
+          onPathHoldStart={startPathHold}
+          theme={equipped.theme ?? ""}
+          trail={equipped.trail ?? ""}
+          frame={equipped.frame ?? ""}
+          worldClockStartedAt={worldClockStartedAt}
+          worldPhase={worldPhase}
+        />
+      </div>
+
+      <header className="immersive-hud" aria-label="Adventure status">
+        <div className="hud-room glass-panel">
+          <span className="hud-overline">THE FOREVER MAZE</span>
+          <strong>ROOM {String(displayRoom).padStart(2, "0")}</strong>
+        </div>
+        <div className="hud-luck glass-panel" aria-label={`Luck ${displayLuck} percent`}>
+          <div className="hud-luck-top"><span>☘</span><span>LUCK</span><strong>{displayLuck}%</strong></div>
+          <div className="hud-luck-track"><div className="hud-luck-fill" style={{ width: `${Math.min(100, displayLuck)}%` }} /></div>
+          {game.overflow && <span className="hud-overflow">FORTUNE READY</span>}
+        </div>
+        <div className="hud-wallet glass-panel">
+          <div className="hud-coins"><span className="coin-stack" aria-hidden="true"><span className="coin-stack-back" /><span className="coin-stack-middle" /><span className="coin-stack-face">$</span></span><strong title={displayMoney.toLocaleString()}>{formatCoinBalance(displayMoney)}</strong></div>
+          <div className="hud-chests"><Icon name="treasure" size={14} /><span>{displayChests} chests found</span></div>
+          <div className={`hud-daily ${displayMoney === 0 ? "hud-daily-waiting" : ""}`}>{displayMoney === 0 ? `Daily pouch · +100 in ${dailyCountdown}` : `+100 daily · ${dailyCountdown}`}</div>
         </div>
       </header>
 
-      <div className="game-main">
-        <section className="play-column">
-          <div className="adventure-heading">
-            <div>
-              <span className="eyebrow">YOUR LUCKY LITTLE ADVENTURE</span>
-              <h1>One more turn<span className="heading-period">.</span></h1>
-            </div>
-            <div className="run-chip">{equippedBadge && <span className="badge-chip" title={equippedBadge.label}>{equippedBadge.icon}</span>}<span className="run-icon">⌁</span><span>ROOM <strong>{String(game.run + 1).padStart(2, "0")}</strong></span></div>
-          </div>
+      <div className="world-title"><span className="world-clover">{equippedIcon ?? "✳"}</span><span>AMAZING GAMBLER</span><span className="world-time">{worldPhase}</span></div>
 
-          <MazeScene
-            game={game}
-            avatar={avatar}
-            onChoosePath={addBet}
-            theme={equipped.theme ?? ""}
-            trail={equipped.trail ?? ""}
-            frame={equipped.frame ?? ""}
-          />
-
-          <div className="journey-footer">
-            <div className="journey-stat"><span className="journey-icon">⌁</span><div><span>On this run</span><strong>{game.run} <small>rooms</small></strong></div></div>
-            <div className="journey-divider" />
-            {statDefinitions.map((stat) => {
-              const value = game.stats[stat.id] ?? stat.initial;
-              return (
-                <div className="journey-stat luck-stat" key={stat.id}>
-                  <span className="luck-symbol">{stat.icon}</span>
-                  <div className="luck-copy">
-                    <span>{stat.label}<b>{value}{stat.unit ?? ""}</b></span>
-                    <div className="luck-track"><div className="luck-fill" style={{ width: `${Math.min(100, value / stat.maximum * 100)}%` }} /></div>
-                  </div>
-                  {stat.id === "luck" && game.overflow && <span className="overflow-chip">OVERFLOW!</span>}
-                </div>
-              );
-            })}
-            <div className="journey-divider" />
-            <div className="journey-stat"><span className="journey-icon treasure-icon"><Icon name="treasure" /></span><div><span>Found</span><strong>{game.chestCount} <small>chests</small></strong></div></div>
-          </div>
-
-          <div className="round-message" aria-live="polite">
-            <span className={`message-icon ${game.event === "trap" ? "message-danger" : ""}`}>{game.event === "trap" ? "!" : game.event === "chest" ? "♢" : game.event === "item" ? "✦" : "✧"}</span>
-            <AnimatePresence mode="wait"><motion.span key={roundOutcome} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -3 }}>{roundOutcome}</motion.span></AnimatePresence>
-          </div>
-        </section>
-
-        <aside className="play-sidebar">
-          <section className="wallet-card">
-            <div className="wallet-top"><span className="eyebrow">YOUR POCKET</span><span className="wallet-spark">✳</span></div>
-            <div className="wallet-amount"><span className="dollar-sign">$</span>{game.money.toLocaleString()}</div>
-            <div className="wallet-caption"><span className="wallet-dot" /> Practice coins <span className="virtual-note">JUST FOR FUN</span></div>
-          </section>
-
-          <section className="decision-panel">
-            <div className="decision-heading">
-              <div><span className="eyebrow">THE NEXT JUNCTION</span><h2>Where will they go?</h2></div>
-              <span className="junction-count">{currentOptions.length} <small>ways</small></span>
-            </div>
-            <p className="decision-hint">Choose up to two paths on the map or below.</p>
-            <div className={`route-options options-${currentOptions.length}`}>
-              {optionNames.map(({ direction, label }) => (
-                <button
-                  key={direction}
-                  className={`route-option ${game.bets[direction] > 0 ? "route-option-active" : ""} ${isDangerous(direction) ? "route-option-danger" : ""}`}
-                  onClick={() => addBet(direction)}
-                  disabled={game.phase !== "choosing" || game.money <= 0 || (selectedCount >= 2 && game.bets[direction] === 0)}
-                  aria-pressed={game.bets[direction] > 0}
-                >
-                  <span className="option-key">{label}</span>
-                  <span className="option-name">{directionNames[direction]}</span>
-                  {isDangerous(direction) && <span className="option-danger">risky</span>}
-                  {game.bets[direction] > 0 && <span className="option-wager">${game.bets[direction]}</span>}
-                  {game.bets[direction] > 0 && <span className="option-check">✓</span>}
-                </button>
-              ))}
-            </div>
-            <div className="wager-row">
-              <span>Your wager</span>
-              <div className="wager-control">
-                <button onClick={() => adjustBet(-10)} disabled={game.phase !== "choosing" || totalBet <= 0} aria-label="Decrease wager">−</button>
-                <span>${totalBet || wager}</span>
-                <button onClick={() => adjustBet(10)} disabled={game.phase !== "choosing" || game.money <= totalBet} aria-label="Increase wager">+</button>
-              </div>
-              <span className="wager-caption">virtual coins</span>
-            </div>
-            <button className="predict-button" onClick={resolveRound} disabled={game.phase !== "choosing" || !selectedCount || totalBet === 0}>
-              <span>{game.phase === "choosing" ? "Lock in prediction" : game.phase === "fallen" ? "Journey ended" : "Explorer on the move"}</span>
-              {game.phase === "choosing" ? <Icon name="arrow" size={19} /> : <span className="button-ellipsis">···</span>}
-            </button>
-            <div className="payout-note"><span>✦</span> Correct path pays <strong>2×</strong> <i>·</i> risky path pays <strong>3×</strong></div>
-          </section>
-
-          <section className="hint-card">
-            <span className="hint-icon">✎</span><div><strong>A little hunch goes a long way.</strong><p>You can spread your coins over more than one path.</p></div>
-          </section>
-          {game.phase === "fallen" && (
-            <div className="run-actions">
-              <button className="new-run-button" onClick={restartRun}><span>↻</span> Find another maze</button>
-              <button className="share-run-button" onClick={() => setResultOpen(true)}>Your adventure card <Icon name="arrow" size={16} /></button>
-            </div>
-          )}
-          <div className="sidebar-bottom">
-            <div className="sidebar-links">
-              <button onClick={() => setShopOpen(true)}><span>✦</span> Curio cabinet</button>
-              <button onClick={() => setResultOpen(true)}><span>✧</span> Adventure card</button>
-            </div>
-            <span>All games are just for fun.</span>
-          </div>
-        </aside>
+      <div className="world-shortcuts">
+        <button className="profile-button glass-panel" onClick={() => setShowPicker(true)} aria-label={`Change explorer, current character ${avatarName}`}>
+          <img src={avatar} alt="" /><span>{avatarName}</span><span className="profile-caret">⌄</span>
+        </button>
+        <button className="glass-tool" onClick={() => setShopOpen(true)}>✦ <span>Curio cabinet</span></button>
+        <button className="glass-tool" onClick={() => setResultOpen(true)}>✧ <span>Journey card</span></button>
+        <button className="glass-tool" onClick={() => setShowTutorial(true)} aria-label="Open game guide">? <span>Game guide</span></button>
+        <PwaInstallButton />
       </div>
 
-      <footer className="site-footer">
-        <span>✳ <strong>AMAZING GAMBLER</strong> <i>·</i> Every maze has a silver lining.</span>
-        <span>Virtual coins only <i>·</i> Made for the love of a good guess</span>
-      </footer>
+      <section className="next-junction-panel glass-panel" aria-label="Choose the explorer's path">
+        <div className="junction-panel-heading">
+          <div>
+            <span className="junction-kicker">THE NEXT JUNCTION <i>·</i> {currentOptions.length} paths ahead</span>
+            <h1>Predict the explorer&apos;s next move</h1>
+            <p>Tap to place 1 coin <span>·</span> press and hold to stack them faster</p>
+          </div>
+          <div className="stake-summary">
+            <span>ON THE LINE</span>
+            <strong title={`${totalBet.toLocaleString()} coins`}><span className="mini-coin">$</span>{formatCoinBalance(totalBet)}</strong>
+            {totalBet > 0 && <button onClick={undoLastCoin} disabled={game.phase !== "choosing"} aria-label="Undo the last coin placed"><Icon name="undo" size={13} /><span>Undo last coin</span></button>}
+          </div>
+        </div>
+        <div className={`route-options options-${currentOptions.length}`}>
+          {optionNames.map(({ direction, label }) => (
+            <button
+              key={direction}
+              className={`route-option ${game.bets[direction] > 0 ? "route-option-active" : ""} ${isDangerous(direction) ? "route-option-danger" : ""}`}
+              onPointerDown={(event) => { if (event.button === 0) startPathHold(direction); }}
+              onPointerLeave={() => {
+                if (heldPathRef.current?.direction === direction) stopPathHold();
+              }}
+              onClick={(event) => { if (event.detail === 0) addBet(direction); }}
+              disabled={game.phase !== "choosing" || game.money <= 0 || (selectedCount >= 2 && game.bets[direction] === 0)}
+              aria-pressed={game.bets[direction] > 0}
+              aria-label={`${directionNames[direction]} path${isDangerous(direction) ? ", risky" : ""}; ${game.bets[direction]} ${game.bets[direction] === 1 ? "coin" : "coins"} placed. Tap to place 1 coin; press and hold to place faster.`}
+            >
+              <span className="option-key">{label}</span>
+              <span className="option-name">{directionNames[direction]}</span>
+              {isDangerous(direction) && <span className="option-danger">risky path</span>}
+              {game.bets[direction] > 0 && <span className="option-wager" title={`${game.bets[direction].toLocaleString()} coins`}>+{formatCoinBalance(game.bets[direction])} <Icon name="coin" size={14} /></span>}
+              {game.bets[direction] > 0 && <span className="option-check">✓</span>}
+              {game.bets[direction] > 0 && <span className="option-progress" style={{ width: `${Math.min(100, game.bets[direction] / Math.max(1, game.money) * 100)}%` }} />}
+            </button>
+          ))}
+        </div>
+        <div className="junction-actions">
+          <span className="coin-instruction">
+            {game.money === 0
+              ? `Your pouch is empty · daily +100 arrives in ${dailyCountdown || "a little while"}`
+              : game.phase === "result"
+                ? "Review this turn's result before choosing again."
+                : game.phase === "approaching"
+                  ? `${characterName} is approaching the crossroads…`
+                  : game.phase === "moving"
+                    ? `${characterName} is taking the path…`
+                  : game.phase !== "choosing"
+                    ? "The explorer is on the move…"
+                    : totalBet > 0
+                      ? `${totalBet} virtual ${totalBet === 1 ? "coin" : "coins"} placed · no real money`
+                      : "Your explorer is waiting for your hunch."}
+          </span>
+          <button className="predict-button" onClick={resolveRound} disabled={game.phase !== "choosing" || !selectedCount || totalBet === 0 || totalBet > game.money || game.money <= 0}>
+            <span>{game.money === 0 ? `Wait for daily coins · ${dailyCountdown || "…"}` : game.phase === "choosing" ? "Watch the turn" : game.phase === "approaching" ? "The moment of fate…" : game.phase === "moving" ? "The explorer is on the move…" : game.phase === "result" ? "Read your turn report" : "Explorer on the move…"}</span>
+            {game.phase === "choosing" && game.money > 0 && <Icon name="arrow" size={19} />}
+            {game.phase !== "choosing" && <span className="button-ellipsis">···</span>}
+          </button>
+        </div>
+        <div className="daily-footnote">Daily allowance: 100 free coins <span>·</span> a cozy game of chance, never real gambling</div>
+      </section>
 
       <AnimatePresence>
         {showPicker && <SelectionModal onSelect={chooseCharacter} onUpload={uploadCharacter} onClose={() => { setShowPicker(false); if (game.phase === "choosing") game.set({ phase: "walking" }); }} hasCharacter={hasPickedCharacter} />}
         {showTutorial && <TutorialModal onClose={closeTutorial} />}
+        {turnResult && game.phase === "result" && (
+          <motion.div className="turn-report-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.section className="turn-report glass-panel" role="dialog" aria-modal="true" aria-labelledby="turn-report-title" initial={{ y: 18, scale: .97 }} animate={{ y: 0, scale: 1 }} exit={{ y: 10, scale: .98 }}>
+              <span className="turn-report-kicker">ROOM {String(turnResult.room).padStart(2, "0")} · TURN REPORT</span>
+              <div className={`turn-outcome-mark ${turnResult.hit ? "turn-outcome-win" : ""}`}>{turnResult.hit ? "✦" : "↗"}</div>
+              <h2 id="turn-report-title">{turnResult.hit ? "A sharp prediction!" : "The path had other plans."}</h2>
+              <p className="turn-report-summary">
+                {characterName} took the <strong>{resultPath}</strong> path.
+                {turnResult.hit
+                  ? ` You backed it with ${turnResult.placedBets[turnResult.actualDirection] ?? 0} coin${turnResult.placedBets[turnResult.actualDirection] === 1 ? "" : "s"}.`
+                  : predictedPaths.length
+                      ? ` You backed ${predictedPaths.map(([direction]) => directionNames[direction]).join(" and ")}.`
+                    : " No coins were placed on that path."}
+              </p>
+              <div className="turn-report-lines">
+                <div><span>Your coins placed</span><strong>−{turnResult.totalStake}</strong></div>
+                <div><span>{turnResult.hit ? `Correct path · ${turnResult.risky ? "risky 3×" : "2×"} payout` : "Path prediction"}</span><strong>{turnResult.pathReward ? `+${turnResult.pathReward}` : "—"}</strong></div>
+                {turnResult.chestReward > 0 && <div><span>{turnResult.chestName ?? "Treasure chest"}</span><strong>+{turnResult.chestReward}</strong></div>}
+                {turnResult.fortuneBonus > 0 && <div><span>{turnResult.risky && turnResult.hit ? "Risky path bonus" : "Fortune bonus"}</span><strong>+{turnResult.fortuneBonus}</strong></div>}
+                {turnResult.itemName && <div><span>{turnResult.itemName}</span><strong>+{turnResult.itemLuckGain}% luck</strong></div>}
+                {turnResult.trapPenalty > 0 && <div className="turn-line-danger"><span>{turnResult.trapName ?? "Trap"}{turnResult.trapCaught ? " · caught!" : ""}</span><strong>−{turnResult.trapPenalty}</strong></div>}
+                <div><span>Luck</span><strong>{turnResult.luckBefore}% <span>→</span> {turnResult.luckAfter}%</strong></div>
+                <div className="turn-line-total"><span>Coin balance</span><strong>{turnResult.balanceBefore} <span>→</span> {turnResult.balanceAfter}</strong></div>
+              </div>
+              <div className={`turn-net ${netCoins < 0 ? "turn-net-loss" : ""}`}>
+                {netCoins >= 0 ? "+" : "−"}{Math.abs(netCoins)} <span>coins this turn</span>
+              </div>
+              <button className="turn-continue" onClick={advanceAfterReport}>
+                Continue to room {String(game.run + 1).padStart(2, "0")} <Icon name="arrow" size={18} />
+              </button>
+              <p className="turn-report-note">The maze keeps going. Your forever adventure is saved automatically.</p>
+            </motion.section>
+          </motion.div>
+        )}
         {resultOpen && (
           <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setResultOpen(false)}>
             <motion.section className="result-modal" initial={{ y: 18 }} animate={{ y: 0 }} exit={{ y: 12 }} onClick={(event) => event.stopPropagation()}>
@@ -921,7 +1320,7 @@ export default function Game() {
               <button className="modal-close" onClick={() => setShopOpen(false)} aria-label="Close curio cabinet">×</button>
               <span className="eyebrow">FOUND ALONG THE WAY</span>
               <h2>A few little extras</h2>
-              <p className="shop-intro">Make this maze feel like yours. Everything here costs practice coins.</p>
+              <p className="shop-intro">Spend virtual coins on cosmetic keepsakes. Tap Buy to collect an item, then tap Equip to change the maze&apos;s look. Decorations never change luck, rewards, or path outcomes.</p>
               <div className="shop-balance"><Icon name="coin" size={17} /> ${game.money.toLocaleString()} <span>in your pocket</span></div>
               <div className="shop-items">
                 {cosmeticDefinitions.map((cosmetic) => {
@@ -938,7 +1337,7 @@ export default function Game() {
                   );
                 })}
               </div>
-              <div className="shop-footnote">A small collection of frames, trails, themes, icons &amp; badges.</div>
+              <div className="shop-footnote">Golden halo decorates your explorer · Moonlit maze changes the scenery · Starlight trail changes the path effect · Lucky compass changes the title mark · Pathfinder badge adds a keepsake. Visuals only, no gameplay advantage.</div>
             </motion.section>
           </motion.div>
         )}
