@@ -1761,10 +1761,15 @@ export default function Game() {
         />
       </div>
 
-      <header className="immersive-hud" aria-label="Adventure status">
+      <header className={`immersive-hud ${isRunPlaying ? "focus-mode-dimmed" : ""}`} aria-label="Adventure status" aria-hidden={isRunPlaying} inert={isRunPlaying}>
         <div className="hud-room glass-panel">
           <span className="hud-overline">THE FOREVER MAZE</span>
           <strong>ROOM {String(displayRoom).padStart(2, "0")}</strong>
+          <span className="hud-room-meta">
+            {environmentForRoom(game.junction.id + 1).name}
+            <i aria-hidden="true">·</i>
+            <span aria-label={`Time of day: ${worldPhase.toLowerCase()}`}>{worldPhase === "DAY" ? "☀" : worldPhase === "NIGHT" ? "☾" : "◐"} {worldPhase}</span>
+          </span>
         </div>
         <div className="hud-luck glass-panel" aria-label={`Luck ${displayLuck} percent; ${Math.round(luckInfluence(displayLuck) * 100)} percent influence`}>
           <div className="hud-luck-top"><span>☘</span><span>LUCK</span><strong>{displayLuck}%</strong></div>
@@ -1785,14 +1790,17 @@ export default function Game() {
             </motion.span>
           )}
           <div className="hud-coins"><span className="coin-single" aria-hidden="true">$</span><strong title={displayMoney.toLocaleString()}>{formatCoinBalance(displayMoney)}</strong></div>
-          <div className="hud-chests"><Icon name="treasure" size={14} /><span>{displayChests} chests found</span></div>
-          <div className={`hud-daily ${displayMoney === 0 ? "hud-daily-waiting" : ""}`}>{displayMoney === 0 ? `Daily pouch · +100 in ${dailyCountdown}` : `+100 daily · ${dailyCountdown}`}</div>
+          <div className="hud-subline">
+            <span className="hud-chests"><Icon name="treasure" size={13} /><span>{displayChests} {displayChests === 1 ? "chest" : "chests"}</span></span>
+            <i aria-hidden="true">·</i>
+            <span className={`hud-daily ${displayMoney === 0 ? "hud-daily-waiting" : ""}`}>{displayMoney === 0 ? `+100 in ${dailyCountdown}` : `+100 daily ${dailyCountdown}`}</span>
+          </div>
         </div>
       </header>
 
-      <div className="world-title"><span className="world-clover">{equippedIcon ?? "✳"}</span><span>AMAZING GAMBLER</span><span className="world-biome">{environmentForRoom(game.junction.id + 1).name}</span><span className="world-time">{worldPhase}</span></div>
+      <div className={`world-title ${isRunPlaying ? "focus-mode-dimmed" : ""}`} aria-hidden={isRunPlaying}><span className="world-clover">{equippedIcon ?? "✳"}</span><span>AMAZING GAMBLER</span></div>
 
-      <div className="world-shortcuts">
+      <div className={`world-shortcuts ${isRunPlaying ? "focus-mode-dimmed" : ""}`} aria-hidden={isRunPlaying} inert={isRunPlaying}>
         <button className="profile-button glass-panel" onClick={() => setShowProfile(true)} aria-label={`Open player profile, currently exploring as ${avatarName}`}>
           <img src={avatar} alt="" /><span>{avatarName}</span><span className="profile-caret">⌄</span>
         </button>
@@ -1877,7 +1885,7 @@ export default function Game() {
         <ProfileSetupModal onComplete={setPlayerNameState} />
       )}
 
-      <LeaderboardPanel playerName={playerName} resolveAvatar={leaderboardAvatar} onSelect={openLeaderboardProfile} />
+      <LeaderboardPanel playerName={playerName} resolveAvatar={leaderboardAvatar} onSelect={openLeaderboardProfile} focusMode={isRunPlaying} />
 
       <AnimatePresence>
         {(showProfile || viewedEntry) && (
