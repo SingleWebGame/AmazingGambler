@@ -3,7 +3,6 @@
 import { LayoutGroup, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { getLeaderboardView, subscribeLeaderboard, type LeaderboardView, type RankedEntry } from "@/lib/leaderboard";
-import { countryFlag } from "@/lib/playerProfile";
 
 type LeaderboardPanelProps = {
   playerName: string | null;
@@ -26,7 +25,6 @@ export default function LeaderboardPanel({ playerName, resolveAvatar, onSelect }
 
   const top = board.top.slice(0, TOP_COUNT);
   const youOutsideTop = playerName && board.me && board.me.rank > TOP_COUNT ? board.me : null;
-  if (!top.length) return null;
 
   const renderRow = (entry: RankedEntry) => {
     const isYou = entry.isYou;
@@ -44,14 +42,11 @@ export default function LeaderboardPanel({ playerName, resolveAvatar, onSelect }
         >
           <span className="lb-rank">{entry.rank}</span>
           <img src={resolveAvatar(entry.characterId)} alt="" />
-          <span className="lb-player-label">
-            <span className="lb-name">{entry.playerName}{isYou && <em> (you)</em>}</span>
-            <span className="lb-balance-row">
-              <span className="lb-coin-icon" aria-hidden="true">$</span>
-              <small className="lb-balance">{compact.format(entry.score)} coins</small>
-            </span>
+          <span className="lb-name">{entry.playerName}</span>
+          <span className="lb-balance-row">
+            <span className="lb-coin-icon" aria-hidden="true">$</span>
+            <small className="lb-balance">{compact.format(entry.score)}</small>
           </span>
-          <span className="lb-flag" aria-hidden="true">{countryFlag(entry.country)}</span>
         </button>
       </motion.li>
     );
@@ -59,12 +54,18 @@ export default function LeaderboardPanel({ playerName, resolveAvatar, onSelect }
 
   return (
     <aside className="leaderboard-panel glass-panel" aria-label="Leaderboard">
-      <span className="lb-title">LEADERBOARD · TOP {TOP_COUNT}</span>
+      <span className="lb-title">TOP {TOP_COUNT}</span>
       <LayoutGroup>
         <ol className="lb-list">
-          {top.map(renderRow)}
-          {youOutsideTop && <li className="lb-gap" aria-hidden="true">⋮</li>}
-          {youOutsideTop && renderRow(youOutsideTop)}
+          {top.length === 0 ? (
+            <li className="lb-empty">{playerName ? "Play to join the board" : "Create a profile to join"}</li>
+          ) : (
+            <>
+              {top.map(renderRow)}
+              {youOutsideTop && <li className="lb-gap" aria-hidden="true">⋮</li>}
+              {youOutsideTop && renderRow(youOutsideTop)}
+            </>
+          )}
         </ol>
       </LayoutGroup>
     </aside>
