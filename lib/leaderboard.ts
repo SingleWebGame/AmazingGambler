@@ -13,6 +13,8 @@ export type LeaderboardEntry = {
   characterId: string;
   country: string | null;
   badgeId: string | null;
+  // Ids of the wanderers this player has collected; empty for older records.
+  ownedIds: string[];
   charactersUnlocked: number;
   roomNumber: number;
   updatedAt: number;
@@ -26,6 +28,7 @@ export type ScoreSubmission = {
   country: string | null;
   // undefined leaves the saved badge untouched; null removes it.
   badgeId?: string | null;
+  ownedIds?: string[];
   charactersUnlocked: number;
   roomNumber: number;
   claimOnly?: boolean;
@@ -37,6 +40,14 @@ const COUNTRY_CODE = /^[A-Z]{2}$/;
 
 // Stays false until the server reports that no online database is configured (e.g. local development).
 let useLocalStore = false;
+
+const MAX_OWNED_IDS = 120;
+
+function cleanIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids = value.filter((id): id is string => typeof id === "string" && CHARACTER_ID.test(id));
+  return [...new Set(ids)].slice(0, MAX_OWNED_IDS);
+}
 
 function count(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
@@ -62,6 +73,7 @@ function readLocal(): StoredEntry[] {
         characterId: typeof record.characterId === "string" && CHARACTER_ID.test(record.characterId) ? record.characterId : "pip",
         country: typeof record.country === "string" && COUNTRY_CODE.test(record.country) ? record.country : null,
         badgeId: typeof record.badgeId === "string" && CHARACTER_ID.test(record.badgeId) ? record.badgeId : null,
+        ownedIds: cleanIds(record.ownedIds),
         charactersUnlocked: count(record.charactersUnlocked, 1),
         roomNumber: count(record.roomNumber, 1),
         updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : 0,
@@ -107,6 +119,7 @@ function submitLocal(submission: ScoreSubmission, name: string): SubmitResult {
       characterId: submission.characterId,
       country: safeCountry,
       badgeId: safeBadge ?? null,
+      ownedIds: cleanIds(submission.ownedIds),
       charactersUnlocked: submission.charactersUnlocked,
       roomNumber: submission.roomNumber,
       updatedAt: Date.now(),
@@ -121,6 +134,7 @@ function submitLocal(submission: ScoreSubmission, name: string): SubmitResult {
     if (safeBadge !== undefined) existing.badgeId = safeBadge;
     if (!submission.claimOnly) {
       existing.charactersUnlocked = submission.charactersUnlocked;
+      if (submission.ownedIds !== undefined) existing.ownedIds = cleanIds(submission.ownedIds);
       existing.roomNumber = submission.roomNumber;
     }
     if (changed) {

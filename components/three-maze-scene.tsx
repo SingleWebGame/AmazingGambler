@@ -160,10 +160,12 @@ const reverseDirection: Record<Direction, Direction> = {
 };
 const directionAngles: Record<Direction, number> = {
   north: 0,
-  east: Math.PI / 2,
+  east: -Math.PI / 2,
   south: Math.PI,
-  west: -Math.PI / 2,
+  west: Math.PI / 2,
 };
+const facingAngle = (from: THREE.Vector3, to: THREE.Vector3) =>
+  Math.atan2(from.x - to.x, from.z - to.z);
 const directionPoint = (direction: Direction, distance: number) => {
   const vector = directionVectors[direction];
   return new THREE.Vector3(vector.x * distance, 0, vector.y * distance);
@@ -1151,7 +1153,9 @@ export default function ThreeMazeScene({
           );
     explorer.position.copy(startingPoint);
     explorer.position.y = 0.1;
-    explorer.rotation.y = directionAngles[propsRef.current.previous ?? "north"];
+    explorer.rotation.y = propsRef.current.phase === "chest" && propsRef.current.previous
+      ? directionAngles[propsRef.current.previous]
+      : facingAngle(startingPoint, new THREE.Vector3(0, 0, 0));
     const fireflies: SceneAssets["fireflies"] = [];
     const fireflyMaterials = defaultTrailColors.map((color) => new THREE.MeshBasicMaterial({ color }));
     const fireflyGeometry = createFireflyGeometry("orbit");
@@ -1248,9 +1252,25 @@ export default function ThreeMazeScene({
     const chestPosition = new THREE.Vector3();
     const indicatorPosition = new THREE.Vector3();
     let layoutAge = 0;
+    // Attached to the body so no panel or stacking context can hide it, including on mobile.
+    const fpsElement = document.createElement("span");
+    fpsElement.className = "scene-fps";
+    fpsElement.setAttribute("aria-hidden", "true");
+    fpsElement.textContent = "-- FPS";
+    document.body.appendChild(fpsElement);
+    let fpsFrameCount = 0;
+    let fpsSampleStartedAt = performance.now();
     const layout: { indicatorRect?: DOMRect; panelTop?: number; shortcutsRect?: DOMRect; hudBottom: number } = { hudBottom: 0 };
     const animate = () => {
       assets.animationFrame = window.requestAnimationFrame(animate);
+      fpsFrameCount++;
+      const fpsSampleElapsed = performance.now() - fpsSampleStartedAt;
+      if (fpsSampleElapsed >= 500) {
+        const fps = Math.round((fpsFrameCount * 1000) / fpsSampleElapsed);
+        fpsElement.textContent = `${fps} FPS`;
+        fpsFrameCount = 0;
+        fpsSampleStartedAt = performance.now();
+      }
       elapsed += 0.01;
       const pattern = assets.trailPattern;
       for (let i = 0; i < assets.fireflies.length; i++) updateFirefly(pattern, assets.fireflies[i], i, elapsed);
@@ -1385,6 +1405,7 @@ export default function ThreeMazeScene({
     animate();
     return () => {
       window.cancelAnimationFrame(assets.animationFrame);
+      fpsElement.remove();
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", pickDirection);
       renderer.domElement.removeEventListener("pointermove", showPointer);
@@ -1491,8 +1512,7 @@ export default function ThreeMazeScene({
         to: new THREE.Vector3(0, 0, 0),
         startedAt: now,
         duration: 2600,
-        // The explorer keeps walking the way it came in, from the entrance toward the centre.
-        facing: directionAngles[propsRef.current.previous ?? "north"],
+        facing: facingAngle(assets.explorer.position, new THREE.Vector3(0, 0, 0)),
       };
       return;
     }
@@ -1519,7 +1539,7 @@ export default function ThreeMazeScene({
     if (phase === "result" || phase === "choosing" || phase === "walking" || phase === "idle") {
       const entrance = directionPoint(previous ? reverseDirection[previous] : "south", 3.05);
       assets.explorer.position.set(entrance.x, 0.1, entrance.z);
-      assets.explorer.rotation.y = directionAngles[previous ?? "north"];
+      assets.explorer.rotation.y = facingAngle(entrance, new THREE.Vector3(0, 0, 0));
       assets.movement = null;
       assets.suspenseStartedAt = null;
     }

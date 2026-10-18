@@ -581,8 +581,55 @@ type ViewedPlayer = {
   score: number;
   roomNumber: number;
   charactersUnlocked: number;
+  ownedIds: string[];
   badge: { icon: string; label: string; rarity: string } | null;
 };
+
+const rarityOrder = ["Ultra-rare", "Legendary", "Epic", "Rare", "Uncommon", "Common"];
+
+function ViewedCollection({ ids, unlocked }: { ids: string[]; unlocked: number }) {
+  const collected = useMemo(() => {
+    const owned = new Set(ids);
+    return characters
+      .filter((character) => owned.has(character.id))
+      .sort((a, b) => rarityOrder.indexOf(a.rarity) - rarityOrder.indexOf(b.rarity));
+  }, [ids]);
+  const summary = rarityOrder
+    .map((rarity) => ({ rarity, count: collected.filter((character) => character.rarity === rarity).length }))
+    .filter((entry) => entry.count > 0);
+  const total = Math.max(unlocked, collected.length);
+  return (
+    <section className="viewed-collection" aria-label="Collected wanderers">
+      <div className="viewed-collection-head">
+        <span className="profile-collection-label">WANDERER COLLECTION</span>
+        <strong>{total} / {characters.length}</strong>
+      </div>
+      <div className="viewed-collection-bar" role="progressbar" aria-valuemin={0} aria-valuemax={characters.length} aria-valuenow={total}>
+        <i style={{ width: `${Math.min(100, (total / characters.length) * 100)}%` }} />
+      </div>
+      {collected.length === 0 ? (
+        <p className="viewed-collection-empty">This explorer&apos;s collection will appear after their next visit to the maze.</p>
+      ) : (
+        <>
+          <div className="viewed-collection-summary">
+            {summary.map(({ rarity, count }) => (
+              <span key={rarity} className={`rarity-${rarity.toLowerCase().replace("-", "")}`}>{count} {rarity}</span>
+            ))}
+          </div>
+          <ul className="viewed-collection-grid">
+            {collected.map((character) => (
+              <li key={character.id} data-rarity={character.rarity} className={`viewed-wanderer rarity-${character.rarity.toLowerCase().replace("-", "")}`} title={`${character.name} · ${character.rarity}`}>
+                <img src={characterPortrait(character)} alt="" loading="lazy" />
+                <span>{character.name}</span>
+                <small>{character.rarity}</small>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
 
 function badgeFor(id: string | null | undefined) {
   const badge = id ? cosmeticDefinitions.find((cosmetic) => cosmetic.id === id && cosmetic.category === "badge") : undefined;
@@ -722,6 +769,9 @@ function PlayerProfileModal({
               <div><span>EXPLORERS UNLOCKED</span><strong>{viewing.charactersUnlocked}</strong></div>
             </div>
           </div>
+          <div className="profile-explorer-scroll">
+            <ViewedCollection ids={viewing.ownedIds} unlocked={viewing.charactersUnlocked} />
+          </div>
           <div className="modal-footnote profile-footnote">Leaderboard rank is decided by total money only.</div>
         </motion.section>
       </motion.div>
@@ -850,7 +900,7 @@ function TutorialModal({ onClose, onTour }: { onClose: () => void; onTour: () =>
           <li><span>2</span><div><strong>Place your virtual coins</strong><p>Each tap adds 1 coin to a path; press and hold to add faster. Tap Undo last coin to take back one, or press and hold to remove coins faster. Your wager is split across the paths you chose.</p></div></li>
           <li><span>3</span><div><strong>Watch destiny unfold</strong><p>After you press Watch the turn, the explorer approaches, the camera zooms, then the random path is revealed. Correct predictions pay 2×, or 3× on a risky path. Read the turn report before continuing.</p></div></li>
           <li><span>4</span><div><strong>Find a chest on the path</strong><p>Each route can hide one chest, placed before your prediction. Coin chests hold 10–1,000 coins; rare violet character chests unlock collectible explorers. The first three chests introduce Moussa Kane, Aissatou Cisse, and Cheikh Thiam. Chest contents are revealed as soon as the explorer reaches them.</p></div></li>
-          <li><span>5</span><div><strong>Your forever adventure</strong><p>Progress saves on this device and the maze keeps going. A daily pouch adds 100 free coins each new day; if you run out, wait for it to arrive.</p></div></li>
+          <li><span>5</span><div><strong>Your forever adventure</strong><p>Progress saves on this device and the maze keeps going. Each new day a daily pouch of 100 free coins is ready; open the game and tap Collect to claim it. Missed days do not stack.</p></div></li>
           <li><span>6</span><div><strong>Collect 100 explorers</strong><p>Start as Seynabou Gaye, earn explorers from rare character chests, or browse the gallery and buy a new companion for 15,000–200,000 virtual coins. Every explorer has a unique Senegalese name, portrait, and their own low-poly 3D look.</p></div></li>
           <li><span>7</span><div><strong>Find luck and trouble</strong><p>Luck rises with good predictions and lucky items. Its influence scales from 0% at 0 Luck to 70% at 100 Luck: it slightly favors paths you backed, makes chests more likely, and makes traps less likely. Traps can still cost coins and Luck.</p></div></li>
           <li><span>8</span><div><strong>Day turns to night</strong><p>In-game day and night each last 5 minutes, with a gentle 30-second transition between them. It only changes the scenery—not luck, paths, or rewards.</p></div></li>
@@ -948,6 +998,7 @@ export default function Game() {
   const [toast, setToast] = useState("");
   const [sessionReady, setSessionReady] = useState(false);
   const [dailyCountdown, setDailyCountdown] = useState("");
+  const [dailyReady, setDailyReady] = useState(false);
   const [worldClockStartedAt, setWorldClockStartedAt] = useState(0);
   const [worldPhase, setWorldPhase] = useState("DAY");
   const [playerName, setPlayerNameState] = useState<string | null>(null);
@@ -1105,11 +1156,11 @@ export default function Game() {
       setToast("Your daily coin bonus could not be saved on this device.");
     }
     if (restored) {
-      const elapsedDays = Math.max(0, today - (restored.dailyClaimDay ?? today));
+      // Daily coins are never added automatically; the player collects them with the Collect button.
       game.set({
         ...restored,
-        money: (restored.money ?? DAILY_ALLOWANCE) + elapsedDays * DAILY_ALLOWANCE + resetGrant,
-        dailyClaimDay: today,
+        money: (restored.money ?? DAILY_ALLOWANCE) + resetGrant,
+        dailyClaimDay: restored.dailyClaimDay ?? today,
         progress: loadProgress(),
       });
     } else {
@@ -1219,17 +1270,14 @@ export default function Game() {
       const remainingSeconds = seconds % 60;
       setDailyCountdown(`${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`);
       const today = dayIndex(now);
-      if (today > useGame.getState().dailyClaimDay) {
-        const current = useGame.getState();
-        const elapsedDays = today - current.dailyClaimDay;
-        current.set({
-          money: current.money + elapsedDays * DAILY_ALLOWANCE,
-          dailyClaimDay: today,
-          message: `Your daily pouch arrived: +${(elapsedDays * DAILY_ALLOWANCE).toLocaleString()} coins.`,
-        });
-        setToast(`Your daily pouch arrived: +${(elapsedDays * DAILY_ALLOWANCE).toLocaleString()} coins.`);
-        window.setTimeout(() => setToast(""), 3500);
-      }
+      const ready = today > useGame.getState().dailyClaimDay;
+      setDailyReady((wasReady) => {
+        if (ready && !wasReady) {
+          setToast("Your daily pouch is ready — tap Collect to claim +100 coins.");
+          window.setTimeout(() => setToast(""), 3500);
+        }
+        return ready;
+      });
     };
     updateDailyAllowance();
     const interval = window.setInterval(updateDailyAllowance, 1000);
@@ -1410,7 +1458,7 @@ export default function Game() {
     const available = Math.max(0, currentGame.money - currentTotal);
     if (!available) {
       if (!toast) {
-        setToast(`No coins left. Your daily pouch arrives in ${dailyCountdown || "a little while"}.`);
+        setToast(dailyReady ? "No coins left. Collect your daily pouch to keep playing." : `No coins left. Your daily pouch is ready in ${dailyCountdown || "a little while"}.`);
         window.setTimeout(() => setToast(""), 3000);
       }
       return;
@@ -1495,9 +1543,23 @@ export default function Game() {
     heldUndoRef.current = null;
   };
 
+  const claimDaily = () => {
+    const current = useGame.getState();
+    const today = dayIndex();
+    if (today <= current.dailyClaimDay) return;
+    current.set({
+      money: current.money + DAILY_ALLOWANCE,
+      dailyClaimDay: today,
+      message: `Daily pouch collected: +${DAILY_ALLOWANCE} coins.`,
+    });
+    setDailyReady(false);
+    setToast(`Daily pouch collected: +${DAILY_ALLOWANCE} coins.`);
+    window.setTimeout(() => setToast(""), 3000);
+  };
+
   const resolveRound = () => {
     if (!selectedCount || totalBet <= 0 || game.phase !== "choosing" || totalBet > game.money) {
-      if (!game.money) setToast(`Your pouch is empty. Your daily +100 arrives in ${dailyCountdown || "a little while"}.`);
+      if (!game.money) setToast(dailyReady ? "Your pouch is empty. Collect your daily +100 to keep playing." : `Your pouch is empty. Your daily +100 is ready in ${dailyCountdown || "a little while"}.`);
       else setToast("Tap a path to place at least one coin first.");
       window.setTimeout(() => setToast(""), 2800);
       return;
@@ -1787,9 +1849,10 @@ export default function Game() {
       country,
       badgeId: equipped.badge ?? null,
       charactersUnlocked: ownedCharacterIds.length,
+      ownedIds: ownedCharacterIds,
       roomNumber: displayRoom,
     });
-  }, [sessionReady, playerName, game.money, selectedCharacterId, country, equipped.badge, ownedCharacterIds.length, displayRoom]);
+  }, [sessionReady, playerName, game.money, selectedCharacterId, country, equipped.badge, ownedCharacterIds, displayRoom]);
 
   useEffect(() => {
     const refresh = () => {
@@ -1819,6 +1882,7 @@ export default function Game() {
         score: viewedEntry.score,
         roomNumber: viewedEntry.roomNumber,
         charactersUnlocked: viewedEntry.charactersUnlocked,
+        ownedIds: viewedEntry.ownedIds,
         badge: badgeFor(viewedEntry.badgeId),
       }
     : null;
@@ -1872,7 +1936,9 @@ export default function Game() {
           <div className="hud-subline">
             <span className="hud-chests"><Icon name="treasure" size={13} /><span>{displayChests} {displayChests === 1 ? "chest" : "chests"}</span></span>
             <i aria-hidden="true">·</i>
-            <span className={`hud-daily ${displayMoney === 0 ? "hud-daily-waiting" : ""}`}>{displayMoney === 0 ? `+100 in ${dailyCountdown}` : `+100 daily ${dailyCountdown}`}</span>
+            {dailyReady
+              ? <button type="button" className="hud-daily hud-daily-collect" data-sound="reward" onClick={claimDaily}>Collect +{DAILY_ALLOWANCE}</button>
+              : <span className={`hud-daily ${displayMoney === 0 ? "hud-daily-waiting" : ""}`}>{displayMoney === 0 ? `+100 in ${dailyCountdown}` : `+100 daily ${dailyCountdown}`}</span>}
           </div>
         </div>
       </header>
@@ -1942,7 +2008,7 @@ export default function Game() {
         <div className="junction-actions">
           <span className="coin-instruction">
             {game.money === 0
-              ? `Your pouch is empty · daily +100 arrives in ${dailyCountdown || "a little while"}`
+              ? dailyReady ? "Your pouch is empty · collect your daily +100" : `Your pouch is empty · daily +100 ready in ${dailyCountdown || "a little while"}`
               : game.phase === "result"
                 ? "Review this turn's result before choosing again."
                 : game.phase === "approaching"
@@ -1955,8 +2021,8 @@ export default function Game() {
                       ? `${totalBet} virtual ${totalBet === 1 ? "coin" : "coins"} placed · no real money`
                       : "Your explorer is waiting for your hunch."}
           </span>
-          <button data-tour="go" className="predict-button" data-sound="predict" onClick={resolveRound} disabled={game.phase !== "choosing" || !selectedCount || totalBet === 0 || totalBet > game.money || game.money <= 0}>
-            <span>{game.money === 0 ? `Wait for daily coins · ${dailyCountdown || "…"}` : game.phase === "choosing" ? "Watch the turn" : game.phase === "approaching" ? "The moment of fate…" : game.phase === "moving" ? "The explorer is on the move…" : game.phase === "result" ? "Read your turn report" : "Explorer on the move…"}</span>
+          <button data-tour="go" className="predict-button" data-sound={game.money === 0 && dailyReady ? "reward" : "predict"} onClick={game.money === 0 && dailyReady ? claimDaily : resolveRound} disabled={game.money === 0 && dailyReady ? game.phase !== "choosing" : game.phase !== "choosing" || !selectedCount || totalBet === 0 || totalBet > game.money || game.money <= 0}>
+            <span>{game.money === 0 ? (dailyReady ? `Collect daily +${DAILY_ALLOWANCE}` : `Daily coins in ${dailyCountdown || "…"}`) : game.phase === "choosing" ? "Watch the turn" : game.phase === "approaching" ? "The moment of fate…" : game.phase === "moving" ? "The explorer is on the move…" : game.phase === "result" ? "Read your turn report" : "Explorer on the move…"}</span>
             {game.phase === "choosing" && game.money > 0 && <Icon name="arrow" size={19} />}
             {game.phase !== "choosing" && <span className="button-ellipsis">···</span>}
           </button>

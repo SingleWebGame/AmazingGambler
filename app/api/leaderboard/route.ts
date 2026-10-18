@@ -21,6 +21,7 @@ const TOP_COUNT = 5;
 const MAX_SCORE = 1e12;
 const ID_PATTERN = /^[A-Za-z0-9-]{16,64}$/;
 const CHARACTER_PATTERN = /^[a-z0-9-]{1,40}$/i;
+const MAX_OWNED_IDS = 120;
 const COUNTRY_PATTERN = /^[A-Z]{2}$/;
 
 type Command = (string | number)[];
@@ -52,6 +53,7 @@ type PublicEntry = {
   characterId: string;
   country: string | null;
   badgeId: string | null;
+  ownedIds: string[];
   charactersUnlocked: number;
   roomNumber: number;
   updatedAt: number;
@@ -68,6 +70,7 @@ function toEntry(id: string, score: number, fields: Record<string, string>, rank
     characterId: CHARACTER_PATTERN.test(fields.characterId ?? "") ? fields.characterId : "pip",
     country: COUNTRY_PATTERN.test(fields.country ?? "") ? fields.country : null,
     badgeId: CHARACTER_PATTERN.test(fields.badgeId ?? "") ? fields.badgeId : null,
+    ownedIds: (fields.ownedIds ?? "").split(",").filter((id) => CHARACTER_PATTERN.test(id)).slice(0, MAX_OWNED_IDS),
     charactersUnlocked: Math.max(1, Number(fields.charactersUnlocked) || 1),
     roomNumber: Math.max(1, Number(fields.roomNumber) || 1),
     updatedAt: Number(fields.updatedAt) || 0,
@@ -151,6 +154,10 @@ export async function POST(request: Request) {
     ? undefined
     : typeof body.badgeId === "string" && CHARACTER_PATTERN.test(body.badgeId) ? body.badgeId : "";
   const charactersUnlocked = body.charactersUnlocked;
+  // Absent leaves the saved collection alone; otherwise keep only valid, unique ids.
+  const ownedIds = Array.isArray(body.ownedIds)
+    ? [...new Set(body.ownedIds.filter((id): id is string => typeof id === "string" && CHARACTER_PATTERN.test(id)))].slice(0, MAX_OWNED_IDS)
+    : undefined;
   const roomNumber = body.roomNumber;
   const claimOnly = body.claimOnly === true;
   if (
@@ -188,6 +195,7 @@ export async function POST(request: Request) {
     if (badgeId !== undefined) writes.push(["HSET", profileKey(playerId), "badgeId", badgeId]);
     if (!claimOnly) {
       writes.push(["HSET", profileKey(playerId), "charactersUnlocked", charactersUnlocked, "roomNumber", roomNumber]);
+      if (ownedIds) writes.push(["HSET", profileKey(playerId), "ownedIds", ownedIds.join(",")]);
     }
     if (changed || (claimOnly && isNew)) {
       writes.push(

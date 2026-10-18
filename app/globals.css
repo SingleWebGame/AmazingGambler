@@ -501,6 +501,7 @@ body {
 .chapter-label { color: #eee6cf; font-size: 9px; }
 .live-dot { background: #b5d195; box-shadow: 0 0 12px #bad8939c; }
 .scene-note { color: #e6dfc8; }
+.scene-fps { position: fixed; z-index: 60; left: max(8px, env(safe-area-inset-left)); bottom: max(3px, env(safe-area-inset-bottom)); padding: 2px 5px; border-radius: 4px; color: #eee6cf; background: rgba(25, 40, 34, .62); font: 9px var(--mono); line-height: 1.2; pointer-events: none; user-select: none; }
 .scene-caption {
   z-index: 2; bottom: 13px; left: 17px; right: 17px; min-height: 38px;
   padding: 0 13px; border: 1px solid rgba(250, 242, 214, .14); border-radius: 12px;
@@ -716,6 +717,21 @@ body {
 .player-profile-modal .character-choice.profile-explorer-selected { border-color: #d9b76d; background: rgba(226, 191, 120, .14); }
 .player-profile-modal .character-choice.profile-explorer-selected small { color: #f1d48e; }
 .profile-footnote { flex: 0 0 auto; margin-top: 8px; text-align: center; }
+.viewed-collection { display: grid; gap: 8px; padding-top: 12px; text-align: left; }
+.viewed-collection-head { display: flex; align-items: baseline; justify-content: space-between; }
+.viewed-collection-head .profile-collection-label { margin: 0; }
+.viewed-collection-head strong { color: #f1d48e; font: 700 11px var(--mono); }
+.viewed-collection-bar { height: 5px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, .1); }
+.viewed-collection-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #5fc84a, #3fa9f5, #b05cf0, #f5a02d); }
+.viewed-collection-summary { display: flex; flex-wrap: wrap; gap: 5px; }
+.viewed-collection-summary span { padding: 2px 7px; border: 1px solid var(--rarity-color); border-radius: 999px; background: color-mix(in srgb, var(--rarity-color) 20%, transparent); color: #f4ecd4; font: 700 8px var(--mono); letter-spacing: .6px; text-transform: uppercase; }
+.viewed-collection-empty { margin: 4px 0 0; color: #aeb5aa; font-size: 11px; }
+.viewed-collection-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0 0 4px; list-style: none; }
+.viewed-wanderer { position: relative; display: grid; justify-items: center; gap: 3px; padding: 7px 3px 0; overflow: hidden; border: 1px solid color-mix(in srgb, var(--rarity-color) 60%, transparent); border-radius: 7px; background: linear-gradient(165deg, color-mix(in srgb, var(--rarity-color) 34%, #10161a), color-mix(in srgb, var(--rarity-color) 8%, #12161d) 75%); box-shadow: inset 0 -3px 0 var(--rarity-color); }
+.viewed-wanderer img { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; box-shadow: 0 0 0 2px var(--rarity-color); }
+.viewed-wanderer span { max-width: 100%; overflow: hidden; color: #e8e7d8; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.viewed-wanderer small { width: 100%; padding: 2px 0; background: color-mix(in srgb, var(--rarity-color) 30%, transparent); color: #fff; font: 700 7px var(--mono); letter-spacing: 1px; text-align: center; text-transform: uppercase; }
+@media (max-width: 420px) { .viewed-collection-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .result-brand, .result-card p, .result-footer, .result-grid > div > span { color: #bac8b2; }
 .result-grid strong { color: #f3e7c4; }
 .result-actions button, .shop-item button { border-color: rgba(230, 229, 202, .17); background: rgba(230, 233, 210, .07); color: #e6e5d3; }
@@ -1145,6 +1161,10 @@ body [contenteditable="true"] {
 .hud-subline i { opacity: .5; font-style: normal; }
 .hud-subline .hud-chests, .hud-subline .hud-daily { display: inline-flex; align-items: center; gap: 4px; margin: 0; color: inherit; font: inherit; letter-spacing: 0; }
 .hud-subline .hud-daily-waiting { color: #ffe09c; }
+.hud-daily-collect { padding: 2px 8px; border: 1px solid #e3c278; border-radius: 999px; background: linear-gradient(#f2d286, #d9ad55); color: #2b2310 !important; font: 700 9px var(--mono) !important; cursor: pointer; pointer-events: auto; animation: daily-pulse 1.6s ease-in-out infinite; }
+.hud-daily-collect:hover { filter: brightness(1.08); }
+@keyframes daily-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(242, 210, 134, .55); } 50% { box-shadow: 0 0 0 6px rgba(242, 210, 134, 0); } }
+@media (prefers-reduced-motion: reduce) { .hud-daily-collect { animation: none; } }
 
 .focus-mode-dimmed { opacity: .18 !important; pointer-events: none !important; transition: opacity .45s ease; }
 .world-title.focus-mode-dimmed { opacity: 0 !important; }
