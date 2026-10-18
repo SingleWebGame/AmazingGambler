@@ -15,6 +15,7 @@ import { CHEAT_COINS, countryFlag, getPlayerCountry, getPlayerName, isCheatPlaye
 import { loadSoundEnabled, playGameSound, setSoundEnabled as saveSoundEnabled, type GameSound } from "@/lib/audio";
 import {
   cosmeticDefinitions,
+  cosmeticCategoryDescriptions,
   cosmeticCategoryLabels,
   cosmeticRarityColors,
   GUARANTEED_ROUNDS,
@@ -2089,7 +2090,11 @@ export default function Game() {
                   );
                 })}
               </div>
-              <div className="shop-items" role="tabpanel">
+              <div className="curio-category-info" role="tabpanel">
+                <strong>{cosmeticCategoryLabels[curioTab]}</strong>
+                <p>{cosmeticCategoryDescriptions[curioTab]}</p>
+              </div>
+              <div className="shop-items">
                 {cosmeticDefinitions.filter((cosmetic) => cosmetic.category === curioTab).map((cosmetic) => {
                   const isOwned = ownedCosmetics.includes(cosmetic.id);
                   const active = equipped[cosmetic.category] === cosmetic.id;

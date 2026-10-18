@@ -11,6 +11,7 @@ import {
   type ChestDrop,
   type Direction,
   type Junction,
+  type TrailPattern,
 } from "@/lib/game";
 import { characterById as explorerById, starterCharacters } from "@/lib/characters";
 
@@ -45,7 +46,10 @@ type SceneAssets = {
   chestPool: THREE.Group[];
   chestIconTextures: Record<ChestDrop["kind"], THREE.CanvasTexture>;
   markerMeshes: THREE.Mesh[];
-  fireflies: { mesh: THREE.Mesh; phase: number; radius: number; speed: number }[];
+  fireflies: { mesh: THREE.Mesh; phase: number; radius: number; speed: number; size: number }[];
+  fireflyMaterials: THREE.MeshBasicMaterial[];
+  fireflyGeometry: THREE.BufferGeometry;
+  trailPattern: TrailPattern;
   explorer: THREE.Group;
   avatarTexture?: THREE.Texture;
   resizeObserver: ResizeObserver;
@@ -576,6 +580,221 @@ function recycleChest(chest: THREE.Group, active: THREE.Group, poolGroup: THREE.
   pool.push(chest);
 }
 
+const FIREFLY_COUNT = 24;
+
+function createFireflyGeometry(pattern: TrailPattern): THREE.BufferGeometry {
+  switch (pattern) {
+    case "twinkle": return new THREE.OctahedronGeometry(0.075, 0);
+    case "petals": return new THREE.SphereGeometry(0.09, 5, 3);
+    case "embers": return new THREE.TetrahedronGeometry(0.075, 0);
+    case "ribbon": return new THREE.SphereGeometry(0.08, 5, 4);
+    default: return new THREE.SphereGeometry(0.052, 5, 4);
+  }
+}
+
+// Swaps the shared geometry/materials of every firefly instead of recreating meshes.
+function applyTrail(assets: SceneAssets, trail: string) {
+  const palette = trailPalettes[trail];
+  const pattern = palette?.pattern ?? "orbit";
+  const colors = palette?.colors ?? defaultTrailColors;
+  assets.fireflyMaterials.forEach((material, index) => material.color.set(colors[index % colors.length]));
+  if (pattern !== assets.trailPattern) {
+    const previous = assets.fireflyGeometry;
+    assets.fireflyGeometry = createFireflyGeometry(pattern);
+    assets.trailPattern = pattern;
+    assets.fireflies.forEach(({ mesh, size }) => {
+      mesh.geometry = assets.fireflyGeometry;
+      mesh.rotation.set(0, 0, 0);
+      mesh.scale.setScalar(size);
+    });
+    previous.dispose();
+  }
+}
+
+function updateFirefly(
+  pattern: TrailPattern,
+  firefly: SceneAssets["fireflies"][number],
+  index: number,
+  elapsed: number,
+) {
+  const { mesh, phase, radius, speed, size } = firefly;
+  const t = elapsed * speed + phase;
+  switch (pattern) {
+    case "twinkle": {
+      mesh.position.set(Math.cos(t) * radius, 0.8 + Math.sin(t * 1.3) * 0.7 + (index % 3) * 0.2, Math.sin(t) * radius * 0.66);
+      mesh.scale.setScalar(size * (0.35 + Math.abs(Math.sin(elapsed * 2.2 + phase * 3)) * 1.2));
+      mesh.rotation.y = elapsed * 2 + phase;
+      break;
+    }
+    case "petals": {
+      const fall = (elapsed * 0.28 * (0.7 + (index % 4) * 0.15) + index * 0.173) % 1;
+      mesh.position.set(
+        Math.cos(phase) * radius * 0.9 + Math.sin(elapsed * 2 + phase) * 0.45,
+        3.4 - fall * 3.2,
+        Math.sin(phase) * radius * 0.6 + Math.cos(elapsed * 1.7 + phase) * 0.35,
+      );
+      mesh.scale.set(size * 1.7, size * 0.4, size * 1.1);
+      mesh.rotation.set(elapsed * 2 + phase, elapsed * 1.4, elapsed * 1.1 + phase);
+      break;
+    }
+    case "embers": {
+      const rise = (elapsed * 0.35 * (0.8 + (index % 3) * 0.25) + index * 0.131) % 1;
+      mesh.position.set(
+        Math.cos(phase) * radius * 0.75 + Math.sin(elapsed * 5 + phase) * 0.12,
+        0.1 + rise * 3.4,
+        Math.sin(phase) * radius * 0.5 + Math.cos(elapsed * 4 + phase) * 0.1,
+      );
+      mesh.scale.setScalar(size * (1.15 - rise) * (0.85 + Math.sin(elapsed * 14 + phase) * 0.3));
+      mesh.rotation.set(elapsed * 3 + phase, elapsed * 2, 0);
+      break;
+    }
+    case "ribbon": {
+      const angle = elapsed * 0.22 + index * (Math.PI * 2 / FIREFLY_COUNT);
+      mesh.position.set(Math.cos(angle) * 5.4, 1.5 + Math.sin(angle * 3 + elapsed * 1.4) * 0.8, Math.sin(angle) * 5.4 * 0.66);
+      mesh.rotation.y = Math.atan2(-0.66 * Math.cos(angle), -Math.sin(angle));
+      mesh.scale.set(size * 2.2, size * 0.55, size * 0.55);
+      break;
+    }
+    default:
+      mesh.position.set(Math.cos(t) * radius, 0.48 + Math.sin(t * 1.7) * 0.42 + (index % 3) * 0.14, Math.sin(t) * radius * 0.66);
+  }
+}
+
+type HaloRig = { group: THREE.Group; update: (seconds: number) => void };
+const HALO_HEIGHT = 2.13;
+const TAU = Math.PI * 2;
+
+// Each halo reuses one material and one geometry per part so it costs a handful of draw calls, and its
+// update function only mutates transforms (no allocations per frame).
+function buildHalo(frame: string): HaloRig {
+  const style = cosmeticHalos[frame];
+  const radius = style?.radius ?? 0.52;
+  const material = new THREE.MeshStandardMaterial({
+    color: style?.color ?? "#f0dfaf",
+    emissive: style?.glow ?? "#b18a45",
+    emissiveIntensity: 0.3,
+    roughness: 0.6,
+    flatShading: true,
+  });
+  const group = new THREE.Group();
+  group.position.y = HALO_HEIGHT;
+  const spin = new THREE.Group();
+  group.add(spin);
+  const flatRing = (r: number, tube: number, radial: number, tubular: number) => {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(r, tube, radial, tubular), material);
+    ring.rotation.x = Math.PI / 2;
+    return ring;
+  };
+
+  if (frame === "emerald-halo") {
+    // Six leaves circling a thin vine ring.
+    spin.add(flatRing(radius, 0.022, 4, 18));
+    const leaf = new THREE.ConeGeometry(0.085, 0.3, 4);
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * TAU;
+      const mesh = new THREE.Mesh(leaf, material);
+      mesh.position.set(Math.cos(angle) * radius, 0.06, Math.sin(angle) * radius);
+      mesh.rotation.set(0, -angle, -Math.PI / 2);
+      spin.add(mesh);
+    }
+    return {
+      group,
+      update: (t) => {
+        spin.rotation.y = t * 1.1;
+        group.position.y = HALO_HEIGHT + Math.sin(t * 2) * 0.05;
+      },
+    };
+  }
+
+  if (frame === "rose-halo") {
+    // A flat blossom of five breathing petals around a bud.
+    const petal = new THREE.SphereGeometry(0.17, 6, 4);
+    for (let i = 0; i < 5; i++) {
+      const angle = (i / 5) * TAU;
+      const mesh = new THREE.Mesh(petal, material);
+      mesh.position.set(Math.cos(angle) * 0.5, 0, Math.sin(angle) * 0.5);
+      mesh.rotation.y = -angle;
+      mesh.scale.set(1.7, 0.4, 0.95);
+      spin.add(mesh);
+    }
+    const bud = new THREE.Mesh(new THREE.SphereGeometry(0.11, 6, 4), material);
+    spin.add(bud);
+    return {
+      group,
+      update: (t) => {
+        spin.rotation.y = t * 0.5;
+        const breath = 1 + Math.sin(t * 2.2) * 0.1;
+        spin.scale.set(breath, 1, breath);
+        group.position.y = HALO_HEIGHT + Math.sin(t * 1.6) * 0.04;
+        material.emissiveIntensity = 0.35 + Math.sin(t * 2.2) * 0.15;
+      },
+    };
+  }
+
+  if (frame === "frost-halo") {
+    // A hexagonal ring of icicles that glint in turn.
+    spin.add(new THREE.Mesh(new THREE.TorusGeometry(radius, 0.03, 4, 6), material));
+    spin.children[0].rotation.x = Math.PI / 2;
+    const icicle = new THREE.ConeGeometry(0.06, 0.36, 4);
+    const icicles: THREE.Mesh[] = [];
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * TAU;
+      const mesh = new THREE.Mesh(icicle, material);
+      mesh.position.set(Math.cos(angle) * radius, 0.16, Math.sin(angle) * radius);
+      spin.add(mesh);
+      icicles.push(mesh);
+    }
+    return {
+      group,
+      update: (t) => {
+        spin.rotation.y = -t * 0.7;
+        group.position.y = HALO_HEIGHT + Math.sin(t * 1.8) * 0.05;
+        for (let i = 0; i < icicles.length; i++) icicles[i].scale.y = 0.85 + Math.max(0, Math.sin(t * 3 - i * 1.05)) * 0.55;
+        material.emissiveIntensity = 0.35 + Math.sin(t * 3) * 0.12;
+      },
+    };
+  }
+
+  if (frame === "solar-crown") {
+    // A spiked crown that spins while a tilted inner ring counter-rotates and the whole crown pulses.
+    spin.add(flatRing(radius, 0.04, 5, 24));
+    const spike = new THREE.ConeGeometry(0.08, 0.46, 4);
+    const spikes: THREE.Mesh[] = [];
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * TAU;
+      const mesh = new THREE.Mesh(spike, material);
+      mesh.position.set(Math.cos(angle) * radius, 0.22, Math.sin(angle) * radius);
+      spin.add(mesh);
+      spikes.push(mesh);
+    }
+    const inner = flatRing(radius * 0.62, 0.025, 4, 18);
+    group.add(inner);
+    return {
+      group,
+      update: (t) => {
+        spin.rotation.y = t * 0.9;
+        inner.rotation.x = Math.PI / 2 + Math.sin(t * 1.3) * 0.5;
+        inner.rotation.z = t * -1.4;
+        group.position.y = HALO_HEIGHT + Math.sin(t * 2) * 0.06;
+        for (let i = 0; i < spikes.length; i++) spikes[i].scale.y = 1 + Math.sin(t * 4 + i * 0.8) * 0.22;
+        material.emissiveIntensity = 0.55 + Math.sin(t * 3) * 0.25;
+      },
+    };
+  }
+
+  // Golden halo (and the fallback): a classic ring that wobbles gently.
+  spin.add(flatRing(radius, 0.035, 5, 16));
+  return {
+    group,
+    update: (t) => {
+      group.rotation.x = Math.sin(t * 1.5) * 0.12;
+      group.rotation.z = Math.cos(t * 1.2) * 0.1;
+      group.position.y = HALO_HEIGHT + Math.sin(t * 2) * 0.04;
+      material.emissiveIntensity = 0.3 + Math.sin(t * 2.4) * 0.1;
+    },
+  };
+}
+
 function buildExplorer(scene: THREE.Scene, avatar: string, frame: string, characterId: string) {
   const character = explorerById.get(characterId) ?? starterCharacters[0];
   const explorer = new THREE.Group();
@@ -648,18 +867,9 @@ function buildExplorer(scene: THREE.Scene, avatar: string, frame: string, charac
     foot.position.set(side * 0.18, 0.27, 0.03);
     explorer.add(foot);
   }
-  const halo = new THREE.Mesh(
-    new THREE.TorusGeometry(cosmeticHalos[frame]?.radius ?? 0.52, 0.035, 5, 16),
-    new THREE.MeshStandardMaterial({
-      color: cosmeticHalos[frame]?.color ?? "#f0dfaf",
-      emissive: cosmeticHalos[frame]?.glow ?? "#b18a45",
-      emissiveIntensity: 0.3,
-      roughness: 0.7,
-    }),
-  );
-  halo.rotation.x = Math.PI / 2;
-  halo.position.y = 2.13;
-  explorer.add(halo);
+  const halo = buildHalo(frame);
+  explorer.add(halo.group);
+  explorer.userData.updateHalo = halo.update;
   const shadow = new THREE.Mesh(
     new THREE.CircleGeometry(0.7, 16),
     new THREE.MeshBasicMaterial({ color: "#233a2b", transparent: true, opacity: 0.2 }),
@@ -943,16 +1153,16 @@ export default function ThreeMazeScene({
     explorer.position.y = 0.1;
     explorer.rotation.y = directionAngles[propsRef.current.previous ?? "north"];
     const fireflies: SceneAssets["fireflies"] = [];
-    const fireflyColors = ["#ffdf8c", "#d7f3b5", "#fff0ba"];
-    for (let i = 0; i < 24; i++) {
-      const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.045 + (i % 3) * 0.012, 5, 4),
-        new THREE.MeshBasicMaterial({ color: fireflyColors[i % fireflyColors.length] }),
-      );
+    const fireflyMaterials = defaultTrailColors.map((color) => new THREE.MeshBasicMaterial({ color }));
+    const fireflyGeometry = createFireflyGeometry("orbit");
+    for (let i = 0; i < FIREFLY_COUNT; i++) {
+      const mesh = new THREE.Mesh(fireflyGeometry, fireflyMaterials[i % fireflyMaterials.length]);
       const phaseOffset = i * 1.91;
       mesh.position.set(Math.cos(phaseOffset) * (4.2 + (i % 4)), 0.55 + (i % 5) * 0.32, Math.sin(phaseOffset) * (3.4 + (i % 3)));
+      const size = 0.9 + (i % 3) * 0.25;
+      mesh.scale.setScalar(size);
       scene.add(mesh);
-      fireflies.push({ mesh, phase: phaseOffset, radius: 4.3 + (i % 5) * 0.58, speed: 0.12 + (i % 4) * 0.025 });
+      fireflies.push({ mesh, phase: phaseOffset, radius: 4.3 + (i % 5) * 0.58, speed: 0.12 + (i % 4) * 0.025, size });
     }
 
     const raycaster = new THREE.Raycaster();
@@ -1008,6 +1218,9 @@ export default function ThreeMazeScene({
       chestIconTextures,
       markerMeshes,
       fireflies,
+      fireflyMaterials,
+      fireflyGeometry,
+      trailPattern: "orbit",
       explorer,
       resizeObserver,
       animationFrame: 0,
@@ -1036,10 +1249,8 @@ export default function ThreeMazeScene({
     const animate = () => {
       assets.animationFrame = window.requestAnimationFrame(animate);
       elapsed += 0.01;
-      assets.fireflies.forEach(({ mesh, phase: offset, radius, speed }, index) => {
-        const t = elapsed * speed + offset;
-        mesh.position.set(Math.cos(t) * radius, 0.48 + Math.sin(t * 1.7) * 0.42 + (index % 3) * 0.14, Math.sin(t) * radius * 0.66);
-      });
+      const pattern = assets.trailPattern;
+      for (let i = 0; i < assets.fireflies.length; i++) updateFirefly(pattern, assets.fireflies[i], i, elapsed);
       assets.chests.children.forEach((chest) => {
         const phase = Number(chest.userData.animationPhase) || 0;
         chest.position.y = 0.22 + Math.sin(elapsed * 1.8 + phase) * 0.08;
@@ -1047,6 +1258,8 @@ export default function ThreeMazeScene({
       });
       const current = propsRef.current;
       const now = performance.now();
+      const updateHalo = assets.explorer.userData.updateHalo as ((seconds: number) => void) | undefined;
+      updateHalo?.(now * 0.001);
       const movement = assets.movement;
       if (movement && current.phase !== "chest") {
         const progress = Math.min(1, (now - movement.startedAt) / movement.duration);
@@ -1315,13 +1528,7 @@ export default function ThreeMazeScene({
   useEffect(() => {
     const assets = assetsRef.current;
     if (!assets) return;
-    assets.fireflies.forEach(({ mesh }, index) => {
-      const material = mesh.material;
-      if (material instanceof THREE.MeshBasicMaterial) {
-        const palette = trailPalettes[trail]?.colors ?? defaultTrailColors;
-        material.color.set(palette[index % palette.length]);
-      }
-    });
+    applyTrail(assets, trail);
   }, [trail]);
 
   useEffect(() => {

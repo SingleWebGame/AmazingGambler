@@ -135,6 +135,14 @@ export const cosmeticCategoryLabels: Record<CosmeticCategory, string> = {
   badge: "Badges",
 };
 
+export const cosmeticCategoryDescriptions: Record<CosmeticCategory, string> = {
+  frame: "Adds a decorative halo above your explorer in the maze. Visual only.",
+  theme: "Changes the maze sky and lighting: Moonlit keeps it dark; Golden noon keeps it bright.",
+  trail: "Changes the colors of the guiding fireflies in the maze. Visual only.",
+  icon: "Changes the small symbol beside the game title. It does not change your luck.",
+  badge: "Adds a decorative symbol beside your player name. Visual only.",
+};
+
 export const cosmeticRarityColors: Record<CosmeticRarity, string> = {
   Common: "#b4bcc4",
   Uncommon: "#5fc84a",
@@ -151,11 +159,13 @@ export const cosmeticHalos: Record<string, { radius: number; color: string; glow
   "solar-crown": { radius: 0.86, color: "#ffd25a", glow: "#e0871c" },
 };
 
-export const trailPalettes: Record<string, { colors: string[]; caption: string }> = {
-  "starlight-trail": { colors: ["#d6eef0", "#d6eef0", "#d6eef0"], caption: "follow the starlight" },
-  "blossom-trail": { colors: ["#ffb7d1", "#ffd9e6", "#ff9ec2"], caption: "follow the petals" },
-  "ember-trail": { colors: ["#ff9a52", "#ffd27a", "#ff6b4a"], caption: "follow the embers" },
-  "aurora-trail": { colors: ["#7df5d0", "#8fb8ff", "#d99bff"], caption: "follow the aurora" },
+export type TrailPattern = "orbit" | "twinkle" | "petals" | "embers" | "ribbon";
+
+export const trailPalettes: Record<string, { colors: string[]; caption: string; pattern: TrailPattern }> = {
+  "starlight-trail": { colors: ["#d6eef0", "#fff6c9", "#bfe1ff"], caption: "follow the starlight", pattern: "twinkle" },
+  "blossom-trail": { colors: ["#ffb7d1", "#ffd9e6", "#ff9ec2"], caption: "follow the petals", pattern: "petals" },
+  "ember-trail": { colors: ["#ff9a52", "#ffd27a", "#ff6b4a"], caption: "follow the embers", pattern: "embers" },
+  "aurora-trail": { colors: ["#7df5d0", "#8fb8ff", "#d99bff"], caption: "follow the aurora", pattern: "ribbon" },
 };
 export const defaultTrailColors = ["#ffdf8c", "#d7f3b5", "#fff0ba"];
 
