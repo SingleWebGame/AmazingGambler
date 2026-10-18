@@ -4,6 +4,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import ThreeMazeScene, { environmentForRoom } from "./three-maze-scene";
+import ProfileButton from "./ProfileButton";
+import ProfileModal from "./ProfileModal";
+import ProfileSetupModal from "./ProfileSetupModal";
+import { submitScore } from "@/lib/leaderboard";
+import { getPlayerName } from "@/lib/playerProfile";
 import { loadSoundEnabled, playGameSound, setSoundEnabled as saveSoundEnabled, type GameSound } from "@/lib/audio";
 import {
   cosmeticDefinitions,
@@ -807,6 +812,10 @@ export default function Game() {
   const [dailyCountdown, setDailyCountdown] = useState("");
   const [worldClockStartedAt, setWorldClockStartedAt] = useState(0);
   const [worldPhase, setWorldPhase] = useState("DAY");
+  const [playerName, setPlayerNameState] = useState<string | null>(null);
+  const [playerNameLoaded, setPlayerNameLoaded] = useState(false);
+  const [setupSkipped, setSetupSkipped] = useState(false);
+  const [playerProfileOpen, setPlayerProfileOpen] = useState(false);
   const worldClockStartedAtRef = useRef<number | null>(null);
   const heldPathRef = useRef<{ direction: Direction; startedAt: number; timer: number } | null>(null);
   const heldUndoRef = useRef<{ startedAt: number; timer: number } | null>(null);
@@ -969,6 +978,8 @@ export default function Game() {
     } catch (error) {
       console.error("Unable to restore your explorer.", error);
     }
+    setPlayerNameState(getPlayerName());
+    setPlayerNameLoaded(true);
     try {
       setTutorialSeen(window.localStorage.getItem("amazing-gambler-tutorial-seen") === "true");
     } catch (error) {
@@ -1573,6 +1584,16 @@ export default function Game() {
     ? (Object.entries(turnResult.placedBets) as [Direction, number][]).filter(([, amount]) => amount > 0)
     : [];
 
+  useEffect(() => {
+    if (!sessionReady || !playerName) return;
+    submitScore({
+      playerName,
+      score: game.money,
+      charactersUnlocked: ownedCharacterIds.length,
+      roomNumber: displayRoom,
+    });
+  }, [sessionReady, playerName, game.money, ownedCharacterIds.length, displayRoom]);
+
   return (
     <main className="game-shell immersive-game">
       <div className="immersive-scene">
@@ -1629,6 +1650,7 @@ export default function Game() {
         <button className="glass-tool character-gallery-button" onClick={() => setCharacterCollectionOpen(true)} aria-label="Open character collection">♙ <span>Explorers</span></button>
         <button className="glass-tool" onClick={() => setShowTutorial(true)} aria-label="Open game guide">? <span>Game guide</span></button>
         <PwaInstallButton />
+        <ProfileButton onClick={() => setPlayerProfileOpen(true)} playerName={playerName} />
         <button
           className="glass-tool sound-toggle"
           data-sound-toggle
@@ -1701,6 +1723,13 @@ export default function Game() {
         </div>
         <div className="daily-footnote">Daily allowance: 100 free coins <span>·</span> a cozy game of chance, never real gambling</div>
       </section>
+
+      {playerNameLoaded && !playerName && !setupSkipped && !showProfile && (
+        <ProfileSetupModal onComplete={setPlayerNameState} onSkip={() => setSetupSkipped(true)} />
+      )}
+      {playerProfileOpen && (
+        <ProfileModal playerName={playerName} onSaved={setPlayerNameState} onClose={() => setPlayerProfileOpen(false)} />
+      )}
 
       <AnimatePresence>
         {showProfile && (
