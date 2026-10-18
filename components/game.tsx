@@ -1,14 +1,13 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { create } from "zustand";
 import ThreeMazeScene, { environmentForRoom } from "./three-maze-scene";
-import ProfileButton from "./ProfileButton";
-import ProfileModal from "./ProfileModal";
+import LeaderboardPanel from "./LeaderboardPanel";
 import ProfileSetupModal from "./ProfileSetupModal";
-import { submitScore } from "@/lib/leaderboard";
-import { getPlayerName } from "@/lib/playerProfile";
+import { getLeaderboard, submitScore, subscribeLeaderboard, type RankedEntry } from "@/lib/leaderboard";
+import { countryFlag, getPlayerCountry, getPlayerName, PLAYER_NAME_MAX, setPlayerName, validatePlayerName } from "@/lib/playerProfile";
 import { loadSoundEnabled, playGameSound, setSoundEnabled as saveSoundEnabled, type GameSound } from "@/lib/audio";
 import {
   cosmeticDefinitions,
@@ -564,6 +563,64 @@ function MazeScene({
   );
 }
 
+type ViewedPlayer = {
+  name: string;
+  avatar: string;
+  characterName: string;
+  country: string | null;
+  rank: number;
+  score: number;
+  roomNumber: number;
+  charactersUnlocked: number;
+};
+
+function PlayerNameEditor({ playerName, onSaved }: { playerName: string | null; onSaved: (name: string) => void }) {
+  const [editing, setEditing] = useState(!playerName);
+  const [value, setValue] = useState(playerName ?? "");
+  const [error, setError] = useState("");
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const check = validatePlayerName(value);
+    if (!check.valid) { setError(check.error); return; }
+    const saved = setPlayerName(check.name);
+    if (!saved.valid) { setError(saved.error); return; }
+    onSaved(saved.name);
+    setValue(saved.name);
+    setError("");
+    setEditing(false);
+  };
+  return (
+    <form className="profile-name-block" onSubmit={submit} noValidate>
+      <span id="player-name-label">PLAYER NAME</span>
+      <div className="profile-name-row">
+        {editing ? (
+          <>
+            <input
+              value={value}
+              onChange={(event) => { setValue(event.target.value); setError(""); }}
+              maxLength={PLAYER_NAME_MAX + 10}
+              placeholder="Alex"
+              autoComplete="nickname"
+              aria-labelledby="player-name-label"
+              aria-invalid={error ? true : undefined}
+              aria-describedby="player-name-error"
+            />
+            <button type="submit" className="profile-name-save">Save</button>
+            {playerName && <button type="button" onClick={() => { setEditing(false); setValue(playerName); setError(""); }}>Cancel</button>}
+          </>
+        ) : (
+          <>
+            <strong>{playerName}</strong>
+            <button type="button" onClick={() => setEditing(true)}>Change name</button>
+          </>
+        )}
+      </div>
+      <p id="player-name-error" className="profile-name-error" role="alert">{error}</p>
+      {editing && <span>3–20 characters: letters, numbers, and spaces.</span>}
+    </form>
+  );
+}
+
 function PlayerProfileModal({
   avatar,
   characterName,
@@ -576,6 +633,12 @@ function PlayerProfileModal({
   onClose,
   canClose,
   ownedCharacterIds,
+  playerName,
+  onNameSaved,
+  country,
+  rank,
+  totalPlayers,
+  viewing,
 }: {
   avatar: string;
   characterName: string;
@@ -588,8 +651,41 @@ function PlayerProfileModal({
   onClose: () => void;
   canClose: boolean;
   ownedCharacterIds: string[];
+  playerName: string | null;
+  onNameSaved: (name: string) => void;
+  country: string | null;
+  rank: number | null;
+  totalPlayers: number;
+  viewing: ViewedPlayer | null;
 }) {
   const unlocked = characters.filter((character) => ownedCharacterIds.includes(character.id));
+  if (viewing) {
+    return (
+      <motion.div className="modal-backdrop profile-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+        <motion.section className="character-modal player-profile-modal" initial={{ y: 16, scale: .97 }} animate={{ y: 0, scale: 1 }} aria-labelledby="profile-title" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+          <div className="player-profile-header">
+            <button className="modal-close" onClick={onClose} aria-label="Close explorer profile">×</button>
+            <span className="eyebrow">LEADERBOARD EXPLORER</span>
+            <h2 id="profile-title">Your explorer profile</h2>
+            <div className="profile-identity">
+              <img src={viewing.avatar} alt="" />
+              <div><span>{viewing.characterName.toUpperCase()}</span><strong>{viewing.name}</strong></div>
+            </div>
+            <div className="profile-rank-row">
+              <span>#{viewing.rank} on the leaderboard</span>
+              <span><span className="profile-flag" aria-hidden="true">{countryFlag(viewing.country)}</span>{viewing.country ?? "Unknown"}</span>
+            </div>
+            <div className="result-grid profile-stats">
+              <div><span>TOTAL MONEY</span><strong>${formatCoinBalance(viewing.score)}</strong></div>
+              <div><span>ROOM REACHED</span><strong>{viewing.roomNumber}</strong></div>
+              <div><span>EXPLORERS UNLOCKED</span><strong>{viewing.charactersUnlocked}</strong></div>
+            </div>
+          </div>
+          <div className="modal-footnote profile-footnote">Leaderboard rank is decided by total money only.</div>
+        </motion.section>
+      </motion.div>
+    );
+  }
   return (
     <motion.div className="modal-backdrop profile-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <motion.section className="character-modal player-profile-modal" initial={{ y: 16, scale: .97 }} animate={{ y: 0, scale: 1 }} aria-labelledby="profile-title" role="dialog" aria-modal="true">
@@ -600,6 +696,11 @@ function PlayerProfileModal({
           <div className="profile-identity">
             <img src={avatar} alt="" />
             <div><span>EXPLORING AS</span><strong>{characterName}</strong></div>
+          </div>
+          <PlayerNameEditor playerName={playerName} onSaved={onNameSaved} />
+          <div className="profile-rank-row">
+            <span>{rank ? `#${rank} of ${totalPlayers} on the leaderboard` : "Not ranked yet"}</span>
+            <span><span className="profile-flag" aria-hidden="true">{countryFlag(country)}</span>{country ?? "Unknown"}</span>
           </div>
           <div className="result-grid profile-stats">
             <div><span>MONEY EARNED</span><strong>${formatCoinBalance(progress.totalEarned)}</strong></div>
@@ -815,7 +916,9 @@ export default function Game() {
   const [playerName, setPlayerNameState] = useState<string | null>(null);
   const [playerNameLoaded, setPlayerNameLoaded] = useState(false);
   const [setupSkipped, setSetupSkipped] = useState(false);
-  const [playerProfileOpen, setPlayerProfileOpen] = useState(false);
+  const [country, setCountry] = useState<string | null>(null);
+  const [rankInfo, setRankInfo] = useState<{ rank: number | null; total: number }>({ rank: null, total: 0 });
+  const [viewedEntry, setViewedEntry] = useState<RankedEntry | null>(null);
   const worldClockStartedAtRef = useRef<number | null>(null);
   const heldPathRef = useRef<{ direction: Direction; startedAt: number; timer: number } | null>(null);
   const heldUndoRef = useRef<{ startedAt: number; timer: number } | null>(null);
@@ -979,6 +1082,7 @@ export default function Game() {
       console.error("Unable to restore your explorer.", error);
     }
     setPlayerNameState(getPlayerName());
+    setCountry(getPlayerCountry());
     setPlayerNameLoaded(true);
     try {
       setTutorialSeen(window.localStorage.getItem("amazing-gambler-tutorial-seen") === "true");
@@ -1589,10 +1693,45 @@ export default function Game() {
     submitScore({
       playerName,
       score: game.money,
+      characterId: selectedCharacterId,
+      country,
       charactersUnlocked: ownedCharacterIds.length,
       roomNumber: displayRoom,
     });
-  }, [sessionReady, playerName, game.money, ownedCharacterIds.length, displayRoom]);
+  }, [sessionReady, playerName, game.money, selectedCharacterId, country, ownedCharacterIds.length, displayRoom]);
+
+  useEffect(() => {
+    const refresh = () => {
+      const board = getLeaderboard();
+      const key = playerName?.toLowerCase();
+      const mine = key ? board.find((entry) => entry.playerName.toLowerCase() === key) : undefined;
+      setRankInfo({ rank: mine?.rank ?? null, total: board.length });
+    };
+    refresh();
+    return subscribeLeaderboard(refresh);
+  }, [playerName]);
+
+  const leaderboardAvatar = (characterId: string) => characterPortrait(characterById.get(characterId) ?? starterCharacters[0]);
+  const openLeaderboardProfile = (entry: RankedEntry) => {
+    if (playerName && entry.playerName.toLowerCase() === playerName.toLowerCase()) {
+      setViewedEntry(null);
+      setShowProfile(true);
+      return;
+    }
+    setViewedEntry(entry);
+  };
+  const viewedPlayer: ViewedPlayer | null = viewedEntry
+    ? {
+        name: viewedEntry.playerName,
+        avatar: leaderboardAvatar(viewedEntry.characterId),
+        characterName: (characterById.get(viewedEntry.characterId) ?? starterCharacters[0]).name,
+        country: viewedEntry.country,
+        rank: viewedEntry.rank,
+        score: viewedEntry.score,
+        roomNumber: viewedEntry.roomNumber,
+        charactersUnlocked: viewedEntry.charactersUnlocked,
+      }
+    : null;
 
   return (
     <main className="game-shell immersive-game">
@@ -1650,7 +1789,6 @@ export default function Game() {
         <button className="glass-tool character-gallery-button" onClick={() => setCharacterCollectionOpen(true)} aria-label="Open character collection">♙ <span>Explorers</span></button>
         <button className="glass-tool" onClick={() => setShowTutorial(true)} aria-label="Open game guide">? <span>Game guide</span></button>
         <PwaInstallButton />
-        <ProfileButton onClick={() => setPlayerProfileOpen(true)} playerName={playerName} />
         <button
           className="glass-tool sound-toggle"
           data-sound-toggle
@@ -1727,12 +1865,11 @@ export default function Game() {
       {playerNameLoaded && !playerName && !setupSkipped && !showProfile && (
         <ProfileSetupModal onComplete={setPlayerNameState} onSkip={() => setSetupSkipped(true)} />
       )}
-      {playerProfileOpen && (
-        <ProfileModal playerName={playerName} onSaved={setPlayerNameState} onClose={() => setPlayerProfileOpen(false)} />
-      )}
+
+      <LeaderboardPanel playerName={playerName} resolveAvatar={leaderboardAvatar} onSelect={openLeaderboardProfile} />
 
       <AnimatePresence>
-        {showProfile && (
+        {(showProfile || viewedEntry) && (
           <PlayerProfileModal
             avatar={avatar}
             characterName={characterName}
@@ -1742,9 +1879,15 @@ export default function Game() {
             onShare={() => void shareResult()}
             onCopy={() => void copyResult()}
             onDownload={downloadResult}
-            onClose={() => setShowProfile(false)}
+            onClose={() => (viewedEntry ? setViewedEntry(null) : setShowProfile(false))}
             canClose={hasPickedCharacter}
             ownedCharacterIds={ownedCharacterIds}
+            playerName={playerName}
+            onNameSaved={setPlayerNameState}
+            country={country}
+            rank={rankInfo.rank}
+            totalPlayers={rankInfo.total}
+            viewing={viewedPlayer}
           />
         )}
         {showTutorial && <TutorialModal onClose={closeTutorial} />}

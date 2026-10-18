@@ -64,6 +64,43 @@ export function clearPlayerName(): void {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(PLAYER_PROFILE_EVENT));
 }
 
+const COUNTRY_KEY = "playerCountry";
+const COUNTRY_CODE = /^[A-Z]{2}$/;
+
+function detectCountry(): string | null {
+  if (typeof navigator === "undefined") return null;
+  for (const language of navigator.languages ?? [navigator.language]) {
+    try {
+      const region = new Intl.Locale(language).maximize().region;
+      if (region && COUNTRY_CODE.test(region)) return region;
+    } catch {
+      // Ignore malformed locale tags.
+    }
+  }
+  return null;
+}
+
+// Auto-set from the browser locale and cached; never typed by the player, so it cannot carry user input.
+export function getPlayerCountry(): string | null {
+  const store = storage();
+  const saved = store?.getItem(COUNTRY_KEY);
+  if (saved && COUNTRY_CODE.test(saved)) return saved;
+  const detected = detectCountry();
+  if (detected) {
+    try {
+      store?.setItem(COUNTRY_KEY, detected);
+    } catch {
+      // Storage unavailable; detection still works next load.
+    }
+  }
+  return detected;
+}
+
+export function countryFlag(code: string | null | undefined): string {
+  if (!code || !COUNTRY_CODE.test(code)) return "🌍";
+  return String.fromCodePoint(...[...code].map((char) => 0x1f1e6 + char.charCodeAt(0) - 65));
+}
+
 export function getSavedPlayerName(): string | null {
   return getPlayerName();
 }
