@@ -989,7 +989,7 @@ body {
   .character-collection-summary { margin-inline: -17px; padding-inline: 17px; }
   .character-collection-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
   .gallery-card { padding-inline: 4px; }
-  .immersive-hud { top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); right: max(10px, env(safe-area-inset-right)); grid-template-columns: 1fr minmax(105px, 1.2fr) 1fr; gap: 6px; }
+  .immersive-hud { top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); right: max(10px, env(safe-area-inset-right));   grid-template-columns: minmax(0, 1fr) minmax(0, .72fr) minmax(0, 1.3fr); gap: 6px; }
   .hud-room, .hud-luck, .hud-wallet { min-height: 52px; border-radius: 12px; }
   .hud-room { min-width: 0; padding: 8px 9px; gap: 3px; }
   .hud-overline { font-size: 7px; letter-spacing: .6px; }
@@ -1294,14 +1294,7 @@ body [contenteditable="true"] {
 .tutorial-tour-button { width: 100%; min-height: 44px; margin-top: 18px; border: 1px solid #d6b46c; border-radius: 4px; background: transparent; color: #d6b46c; font-size: 12px; font-weight: 600; cursor: pointer; }
 .tutorial-tour-button + .tutorial-close-button { margin-top: 8px; }
 
-.tip-banner { grid-area: tip; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 8px 11px; border: 1px solid rgba(232, 206, 145, .28); border-radius: 10px; background: rgba(232, 206, 145, .1); color: #efe6c8; font-size: 11px; line-height: 1.4; animation: tip-in .5s ease both; }
-.tip-banner .tip-icon { font-size: 16px; }
-.tip-bless { border-color: rgba(143, 220, 120, .5); background: rgba(95, 200, 74, .14); }
-.tip-warn { border-color: rgba(245, 160, 45, .5); background: rgba(245, 160, 45, .12); }
-.tip-bold { border-color: rgba(176, 92, 240, .5); background: rgba(176, 92, 240, .13); }
-@keyframes tip-in { from { opacity: 0; transform: translateY(5px); } }
-@media (min-width: 761px) { .next-junction-panel { grid-template-areas: "tip tip" "head opts" "act opts" "foot foot"; } }
-@media (max-width: 760px) and (max-height: 700px) { .tip-banner { display: none; } }
+@media (min-width: 761px) { .next-junction-panel { grid-template-areas: "head opts" "act opts" "foot foot"; } }
 
 .notice-layer { position: fixed; z-index: 50; top: max(12px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: min(420px, calc(100% - 24px)); pointer-events: none; }
 .rank-notice { position: relative; overflow: hidden; display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(232, 206, 145, .6); background: linear-gradient(120deg, #2b4a39, #1c2f27); color: #f6e2aa; box-shadow: 0 14px 40px rgba(0, 0, 0, .5); pointer-events: auto; }
@@ -1370,5 +1363,5 @@ body [contenteditable="true"] {
 .rarity-ultrarare { background: linear-gradient(150deg, #5b2a63, #1b3a5a 55%, #5a4a1d); border-image: linear-gradient(135deg, #ffd86b, #ff7ad9, #6fe3ff) 1; }
 @keyframes card-shine { from { background-position: 150% 0; } to { background-position: -100% 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .tour-spotlight, .rank-confetti i, .rarity-legendary::after, .rarity-ultrarare::after, .hud-luck-up, .hud-luck-down, .tip-banner { animation: none; }
+  .tour-spotlight, .rank-confetti i, .rarity-legendary::after, .rarity-ultrarare::after, .hud-luck-up, .hud-luck-down { animation: none; }
 }

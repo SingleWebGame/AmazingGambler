@@ -8,7 +8,6 @@ import LeaderboardPanel from "./LeaderboardPanel";
 import GuidedTour, { type TourModal } from "./GuidedTour";
 import { InstallNudge, RankNotice } from "./GameNotices";
 import { usePwaInstall } from "@/lib/pwaInstall";
-import { getPlayTip } from "@/lib/tips";
 import ProfileSetupModal from "./ProfileSetupModal";
 import { claimPlayerName, getLeaderboardView, submitScore, subscribeLeaderboard, type RankedEntry } from "@/lib/leaderboard";
 import { CHEAT_COINS, countryFlag, getPlayerCountry, getPlayerName, isCheatPlayer, resolvePlayerCountry, PLAYER_NAME_MAX, setPlayerName, validatePlayerName } from "@/lib/playerProfile";
@@ -1094,7 +1093,6 @@ export default function Game() {
   const animatedLuck = useTweenedNumber(displayLuck, 900);
   const [luckFlash, setLuckFlash] = useState<"up" | "down" | null>(null);
   const previousLuckRef = useRef<number | null>(null);
-  const playTip = getPlayTip({ run: game.run, luck, money: game.money });
   const [showTour, setShowTour] = useState(false);
   const [installHelp, setInstallHelp] = useState<InstallHelpPlatform | null>(null);
   const [curioTab, setCurioTab] = useState<CosmeticCategory>("frame");
@@ -1966,10 +1964,6 @@ export default function Game() {
       </div>
 
       <section className={`next-junction-panel glass-panel ${isRunPlaying ? "next-junction-panel-fading" : ""}`} aria-label="Choose the explorer's path" aria-hidden={isRunPlaying}>
-              <div className={`tip-banner tip-${playTip.tone}`} role="note" key={playTip.text}>
-                <span className="tip-icon" aria-hidden="true">{playTip.icon}</span>
-                <span>{playTip.text}</span>
-              </div>
               <div className="junction-panel-heading">
           <div>
             <span className="junction-kicker">THE NEXT JUNCTION <i>·</i> {currentOptions.length} paths ahead</span>
