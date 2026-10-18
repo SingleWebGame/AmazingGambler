@@ -2,7 +2,7 @@
 
 import { LayoutGroup, motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { getLeaderboard, subscribeLeaderboard, type RankedEntry } from "@/lib/leaderboard";
+import { getLeaderboardView, subscribeLeaderboard, type LeaderboardView, type RankedEntry } from "@/lib/leaderboard";
 import { countryFlag } from "@/lib/playerProfile";
 
 type LeaderboardPanelProps = {
@@ -17,25 +17,22 @@ const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFracti
 const slowMove = { type: "spring" as const, stiffness: 38, damping: 15, mass: 1.2 };
 
 export default function LeaderboardPanel({ playerName, resolveAvatar, onSelect }: LeaderboardPanelProps) {
-  const [entries, setEntries] = useState<RankedEntry[]>([]);
+  const [board, setBoard] = useState<LeaderboardView>(() => getLeaderboardView());
 
   useEffect(() => {
-    const refresh = () => setEntries(getLeaderboard());
-    refresh();
+    const refresh = () => setBoard(getLeaderboardView());
     return subscribeLeaderboard(refresh);
   }, []);
 
-  const youKey = playerName?.toLowerCase() ?? null;
-  const top = entries.slice(0, TOP_COUNT);
-  const you = youKey ? entries.find((entry) => entry.playerName.toLowerCase() === youKey) : undefined;
-  const youOutsideTop = you && you.rank > TOP_COUNT ? you : null;
+  const top = board.top.slice(0, TOP_COUNT);
+  const youOutsideTop = playerName && board.me && board.me.rank > TOP_COUNT ? board.me : null;
   if (!top.length) return null;
 
   const renderRow = (entry: RankedEntry) => {
-    const isYou = entry.playerName.toLowerCase() === youKey;
+    const isYou = entry.isYou;
     return (
       <motion.li
-        key={entry.playerName.toLowerCase()}
+        key={`${entry.playerName.toLowerCase()}`}
         layout="position"
         transition={slowMove}
         className={`lb-item ${isYou ? "lb-you" : ""} ${entry.rank === 1 ? "lb-leader" : ""}`}

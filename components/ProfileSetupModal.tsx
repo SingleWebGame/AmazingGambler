@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { claimPlayerName } from "@/lib/leaderboard";
 import { PLAYER_NAME_MAX, setPlayerName, validatePlayerName } from "@/lib/playerProfile";
 
 type ProfileSetupModalProps = {
@@ -16,11 +17,25 @@ export default function ProfileSetupModal({ onComplete }: ProfileSetupModalProps
     inputRef.current?.focus();
   }, []);
 
-  function submit(event: FormEvent) {
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent) {
     event.preventDefault();
+    if (busy) return;
     const check = validatePlayerName(value);
     if (!check.valid) {
       setError(check.error);
+      return;
+    }
+    setBusy(true);
+    const claim = await claimPlayerName(check.name);
+    setBusy(false);
+    if (claim === "name_taken") {
+      setError("That name is already taken. Please choose another.");
+      return;
+    }
+    if (claim === "offline") {
+      setError("Can't reach the leaderboard right now. Check your connection and try again.");
       return;
     }
     const saved = setPlayerName(check.name);
@@ -58,7 +73,7 @@ export default function ProfileSetupModal({ onComplete }: ProfileSetupModalProps
         <p id="profile-setup-help" className="mt-2 text-xs text-slate-400">3–20 characters: letters, numbers, and spaces.</p>
         <p id="profile-setup-error" role="alert" className="mt-2 min-h-[1.25rem] text-sm text-red-400">{error}</p>
         <div className="mt-4">
-          <button type="submit" className="min-h-[44px] w-full rounded-lg bg-amber-400 px-4 py-2 font-bold text-slate-900 hover:bg-amber-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-white">Continue</button>
+          <button type="submit" className="min-h-[44px] w-full rounded-lg bg-amber-400 px-4 py-2 font-bold text-slate-900 hover:bg-amber-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-60" disabled={busy}>{busy ? "Checking…" : "Continue"}</button>
         </div>
       </form>
     </div>

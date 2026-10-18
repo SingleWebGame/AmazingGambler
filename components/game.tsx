@@ -1,12 +1,12 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { create } from "zustand";
 import ThreeMazeScene, { environmentForRoom } from "./three-maze-scene";
 import LeaderboardPanel from "./LeaderboardPanel";
 import ProfileSetupModal from "./ProfileSetupModal";
-import { getLeaderboard, submitScore, subscribeLeaderboard, type RankedEntry } from "@/lib/leaderboard";
+import { claimPlayerName, getLeaderboardView, submitScore, subscribeLeaderboard, type RankedEntry } from "@/lib/leaderboard";
 import { countryFlag, getPlayerCountry, getPlayerName, PLAYER_NAME_MAX, setPlayerName, validatePlayerName } from "@/lib/playerProfile";
 import { loadSoundEnabled, playGameSound, setSoundEnabled as saveSoundEnabled, type GameSound } from "@/lib/audio";
 import {
@@ -578,10 +578,17 @@ function PlayerNameEditor({ playerName, onSaved }: { playerName: string | null; 
   const [editing, setEditing] = useState(!playerName);
   const [value, setValue] = useState(playerName ?? "");
   const [error, setError] = useState("");
-  const submit = (event: FormEvent) => {
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (busy) return;
     const check = validatePlayerName(value);
     if (!check.valid) { setError(check.error); return; }
+    setBusy(true);
+    const claim = await claimPlayerName(check.name);
+    setBusy(false);
+    if (claim === "name_taken") { setError("That name is already taken. Please choose another."); return; }
+    if (claim === "offline") { setError("Can't reach the leaderboard right now. Try again."); return; }
     const saved = setPlayerName(check.name);
     if (!saved.valid) { setError(saved.error); return; }
     onSaved(saved.name);
@@ -594,7 +601,7 @@ function PlayerNameEditor({ playerName, onSaved }: { playerName: string | null; 
       <span id="player-name-label">PLAYER NAME</span>
       <div className="profile-name-row">
         {editing ? (
-          <>
+          <Fragment key="editing">
             <input
               value={value}
               onChange={(event) => { setValue(event.target.value); setError(""); }}
@@ -605,14 +612,15 @@ function PlayerNameEditor({ playerName, onSaved }: { playerName: string | null; 
               aria-invalid={error ? true : undefined}
               aria-describedby="player-name-error"
             />
-            <button type="submit" className="profile-name-save">Save</button>
-            {playerName && <button type="button" onClick={() => { setEditing(false); setValue(playerName); setError(""); }}>Cancel</button>}
-          </>
+            <button key="save" type="submit" className="profile-name-save" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+            {playerName && <button key="cancel" type="button" onClick={() => { setEditing(false); setValue(playerName); setError(""); }}>Cancel</button>}
+          </Fragment>
         ) : (
-          <>
+          // Distinct keys stop React from reusing this type="button" element as the submit button mid-click.
+          <Fragment key="viewing">
             <strong>{playerName}</strong>
-            <button type="button" onClick={() => setEditing(true)}>Change name</button>
-          </>
+            <button key="change" type="button" onClick={() => setEditing(true)}>Change name</button>
+          </Fragment>
         )}
       </div>
       <p id="player-name-error" className="profile-name-error" role="alert">{error}</p>
@@ -1701,10 +1709,8 @@ export default function Game() {
 
   useEffect(() => {
     const refresh = () => {
-      const board = getLeaderboard();
-      const key = playerName?.toLowerCase();
-      const mine = key ? board.find((entry) => entry.playerName.toLowerCase() === key) : undefined;
-      setRankInfo({ rank: mine?.rank ?? null, total: board.length });
+      const board = getLeaderboardView();
+      setRankInfo({ rank: board.me?.rank ?? null, total: board.total });
     };
     refresh();
     return subscribeLeaderboard(refresh);
@@ -1712,7 +1718,7 @@ export default function Game() {
 
   const leaderboardAvatar = (characterId: string) => characterPortrait(characterById.get(characterId) ?? starterCharacters[0]);
   const openLeaderboardProfile = (entry: RankedEntry) => {
-    if (playerName && entry.playerName.toLowerCase() === playerName.toLowerCase()) {
+    if (entry.isYou) {
       setViewedEntry(null);
       setShowProfile(true);
       return;

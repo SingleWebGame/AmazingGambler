@@ -101,6 +101,26 @@ export function countryFlag(code: string | null | undefined): string {
   return String.fromCodePoint(...[...code].map((char) => 0x1f1e6 + char.charCodeAt(0) - 65));
 }
 
+const PLAYER_ID_KEY = "playerId";
+const PLAYER_ID = /^[A-Za-z0-9-]{16,64}$/;
+
+// Private random id that owns this player's leaderboard entry. A future login (Google, Discord, email)
+// can replace it with the provider account id without changing leaderboard logic.
+export function getPlayerId(): string {
+  const store = storage();
+  const saved = store?.getItem(PLAYER_ID_KEY);
+  if (saved && PLAYER_ID.test(saved)) return saved;
+  const id = typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  try {
+    store?.setItem(PLAYER_ID_KEY, id);
+  } catch {
+    // Storage unavailable; a fresh id is generated next load.
+  }
+  return id;
+}
+
 export function getSavedPlayerName(): string | null {
   return getPlayerName();
 }
