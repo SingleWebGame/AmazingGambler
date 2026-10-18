@@ -1007,7 +1007,7 @@ body {
   .hud-chests svg { width: 12px; height: 12px; }
   .hud-daily { margin-top: 2px; font-size: 6px; letter-spacing: -.2px; }
   .world-title { left: 12px; top: calc(max(10px, env(safe-area-inset-top)) + 60px); font-size: 7px; }
-  .next-junction-panel { bottom: max(8px, env(safe-area-inset-bottom)); width: calc(100% - 16px); max-height: calc(100dvh - max(130px, env(safe-area-inset-top) + 130px)); overflow-y: auto; overscroll-behavior: contain; padding: 12px 11px 9px; border-radius: 17px; }
+  .next-junction-panel { bottom: max(8px, env(safe-area-inset-bottom)); width: calc(100% - 16px); max-height: calc(100dvh - max(130px, env(safe-area-inset-top) + 130px)); overflow-y: auto; overscroll-behavior: contain; padding: 10px 10px 8px; border-radius: 17px; }
   .junction-kicker { font-size: 7px; letter-spacing: .75px; }
   .junction-panel-heading h1 { font-size: 19px; }
   .junction-panel-heading p { max-width: 220px; font-size: 9px; }
@@ -1262,7 +1262,7 @@ body [contenteditable="true"] {
   .hud-overline { display: none; }
   .hud-room-meta { font-size: 7px; letter-spacing: .3px; }
   .hud-subline { margin-top: 3px; font-size: 8px; gap: 3px; }
-  .route-option { height: 48px; min-height: 48px; }
+  .route-option { height: 44px; min-height: 44px; }
   .predict-button { min-height: 52px; }
   .lb-toggle { min-height: 24px; }
   .lb-collapsed-summary { font-size: 8px; }
@@ -1307,7 +1307,7 @@ body [contenteditable="true"] {
 .rank-confetti i { position: absolute; top: 50%; left: 50%; width: 5px; height: 8px; border-radius: 1px; background: hsl(calc(var(--i) * 26), 85%, 62%); animation: confetti-burst 1.3s ease-out both; }
 @keyframes confetti-burst { from { transform: translate(0, 0) rotate(0); opacity: 1; } to { transform: translate(calc((var(--i) - 7) * 24px), calc(((var(--i) % 3) - 1) * 40px - 20px)) rotate(540deg); opacity: 0; } }
 
-.install-nudge { position: fixed; z-index: 45; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(460px, calc(100% - 20px)); display: flex; align-items: center; gap: 11px; padding: 12px 14px; color: #f1ead3; }
+.install-nudge { position: fixed; z-index: 45; left: 0; right: 0; bottom: max(14px, env(safe-area-inset-bottom)); width: min(460px, calc(100% - 20px)); margin-inline: auto; display: flex; align-items: center; gap: 11px; padding: 12px 14px; color: #f1ead3; }
 .install-nudge-icon { font-size: 26px; }
 .install-nudge-copy { flex: 1; display: grid; gap: 2px; }
 .install-nudge-copy strong { font: 600 13px var(--serif); color: #f6e2aa; }
