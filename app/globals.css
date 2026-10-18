@@ -1122,3 +1122,20 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .lb-item button { transition: none; }
 }
+
+body, body * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body input[type="text"],
+body input[type="search"],
+body input[type="email"],
+body input[type="url"],
+body input[type="tel"],
+body input[type="password"],
+body textarea,
+body [contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
