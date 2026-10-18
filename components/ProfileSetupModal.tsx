@@ -5,20 +5,16 @@ import { PLAYER_NAME_MAX, setPlayerName, validatePlayerName } from "@/lib/player
 
 type ProfileSetupModalProps = {
   onComplete: (name: string) => void;
-  onSkip: () => void;
 };
 
-export default function ProfileSetupModal({ onComplete, onSkip }: ProfileSetupModalProps) {
+export default function ProfileSetupModal({ onComplete }: ProfileSetupModalProps) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onSkip(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onSkip]);
+  }, []);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -61,9 +57,8 @@ export default function ProfileSetupModal({ onComplete, onSkip }: ProfileSetupMo
         />
         <p id="profile-setup-help" className="mt-2 text-xs text-slate-400">3–20 characters: letters, numbers, and spaces.</p>
         <p id="profile-setup-error" role="alert" className="mt-2 min-h-[1.25rem] text-sm text-red-400">{error}</p>
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row-reverse">
-          <button type="submit" className="min-h-[44px] flex-1 rounded-lg bg-amber-400 px-4 py-2 font-bold text-slate-900 hover:bg-amber-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-white">Continue</button>
-          <button type="button" onClick={onSkip} className="min-h-[44px] flex-1 rounded-lg border border-white/30 px-4 py-2 text-slate-200 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300">Play without leaderboard</button>
+        <div className="mt-4">
+          <button type="submit" className="min-h-[44px] w-full rounded-lg bg-amber-400 px-4 py-2 font-bold text-slate-900 hover:bg-amber-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-white">Continue</button>
         </div>
       </form>
     </div>

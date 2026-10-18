@@ -915,7 +915,6 @@ export default function Game() {
   const [worldPhase, setWorldPhase] = useState("DAY");
   const [playerName, setPlayerNameState] = useState<string | null>(null);
   const [playerNameLoaded, setPlayerNameLoaded] = useState(false);
-  const [setupSkipped, setSetupSkipped] = useState(false);
   const [country, setCountry] = useState<string | null>(null);
   const [rankInfo, setRankInfo] = useState<{ rank: number | null; total: number }>({ rank: null, total: 0 });
   const [viewedEntry, setViewedEntry] = useState<RankedEntry | null>(null);
@@ -1862,8 +1861,8 @@ export default function Game() {
         <div className="daily-footnote">Daily allowance: 100 free coins <span>·</span> a cozy game of chance, never real gambling</div>
       </section>
 
-      {playerNameLoaded && !playerName && !setupSkipped && !showProfile && (
-        <ProfileSetupModal onComplete={setPlayerNameState} onSkip={() => setSetupSkipped(true)} />
+      {playerNameLoaded && !playerName && !showProfile && (
+        <ProfileSetupModal onComplete={setPlayerNameState} />
       )}
 
       <LeaderboardPanel playerName={playerName} resolveAvatar={leaderboardAvatar} onSelect={openLeaderboardProfile} />
