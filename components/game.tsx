@@ -1,16 +1,23 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { create } from "zustand";
 import ThreeMazeScene, { environmentForRoom } from "./three-maze-scene";
 import LeaderboardPanel from "./LeaderboardPanel";
+import GuidedTour, { type TourModal } from "./GuidedTour";
+import { InstallNudge, RankNotice } from "./GameNotices";
+import { usePwaInstall } from "@/lib/pwaInstall";
+import { getPlayTip } from "@/lib/tips";
 import ProfileSetupModal from "./ProfileSetupModal";
 import { claimPlayerName, getLeaderboardView, submitScore, subscribeLeaderboard, type RankedEntry } from "@/lib/leaderboard";
-import { countryFlag, getPlayerCountry, getPlayerName, PLAYER_NAME_MAX, setPlayerName, validatePlayerName } from "@/lib/playerProfile";
+import { countryFlag, getPlayerCountry, getPlayerName, resolvePlayerCountry, PLAYER_NAME_MAX, setPlayerName, validatePlayerName } from "@/lib/playerProfile";
 import { loadSoundEnabled, playGameSound, setSoundEnabled as saveSoundEnabled, type GameSound } from "@/lib/audio";
 import {
   cosmeticDefinitions,
+  cosmeticCategoryLabels,
+  cosmeticRarityColors,
+  GUARANTEED_ROUNDS,
   choosePredictedPath,
   createJunction,
   directionLabels,
@@ -171,7 +178,7 @@ function createJunctionWithChests(
       if (drop) chests[direction] = drop;
     }
   }
-  return { ...junction, hazards: id < 4 ? [] : junction.hazards, chests };
+  return { ...junction, hazards: id < GUARANTEED_ROUNDS ? [] : junction.hazards, chests };
 }
 
 function loadForeverSession(): Partial<GameState> | null {
@@ -777,10 +784,10 @@ function CharacterCollectionModal({
               const owned = ownedIds.includes(character.id);
               const selected = selectedId === character.id;
               return (
-                <article className={`gallery-card rarity-${character.rarity.toLowerCase().replace("-", "")}`} key={character.id}>
+                <article data-rarity={character.rarity} className={`gallery-card rarity-${character.rarity.toLowerCase().replace("-", "")}`} key={character.id}>
                   <img src={characterPortrait(character)} alt="" />
                   <strong>{character.name}</strong>
-                  <span>{character.rarity}</span>
+                  <span className="gallery-rarity">{character.rarity}</span>
                   <button
                     data-sound={owned ? "reward" : "purchase"}
                     className={selected ? "gallery-selected" : ""}
@@ -799,7 +806,7 @@ function CharacterCollectionModal({
   );
 }
 
-function TutorialModal({ onClose }: { onClose: () => void }) {
+function TutorialModal({ onClose, onTour }: { onClose: () => void; onTour: () => void }) {
   return (
     <motion.div className="modal-backdrop tutorial-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <motion.section
@@ -815,7 +822,7 @@ function TutorialModal({ onClose }: { onClose: () => void }) {
         <h2 id="tutorial-title">How to play</h2>
         <p id="tutorial-description" className="tutorial-intro">Read the crossroads, predict the explorer&apos;s next move, and learn what every part of the maze does. This guide is always available from the ? button.</p>
         <ol className="tutorial-steps">
-          <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. After the opening four rooms, a spiked trap on a path marks a risky route: it can cost coins and Luck, but pays 3× when your prediction is right. Your first four predictions are guaranteed wins while you meet the explorer crew.</p></div></li>
+          <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. After the opening five rooms, a spiked trap on a path marks a risky route: it can cost coins and Luck, but pays 3× when your prediction is right. Your first five predictions are guaranteed wins, so experiment freely. After that, when Luck is low, place small bets to keep losses small.</p></div></li>
           <li><span>2</span><div><strong>Place your virtual coins</strong><p>Each tap adds 1 coin to a path; press and hold to add faster. Tap Undo last coin to take back one, or press and hold to remove coins faster. Your wager is split across the paths you chose.</p></div></li>
           <li><span>3</span><div><strong>Watch destiny unfold</strong><p>After you press Watch the turn, the explorer approaches, the camera zooms, then the random path is revealed. Correct predictions pay 2×, or 3× on a risky path. Read the turn report before continuing.</p></div></li>
           <li><span>4</span><div><strong>Find a chest on the path</strong><p>Each route can hide one chest, placed before your prediction. Coin chests hold 10–1,000 coins; rare violet character chests unlock collectible explorers. The first three chests introduce Moussa Kane, Aissatou Cisse, and Cheikh Thiam. Chest contents are revealed as soon as the explorer reaches them.</p></div></li>
@@ -824,6 +831,7 @@ function TutorialModal({ onClose }: { onClose: () => void }) {
           <li><span>7</span><div><strong>Find luck and trouble</strong><p>Luck rises with good predictions and lucky items. Its influence scales from 0% at 0 Luck to 70% at 100 Luck: it slightly favors paths you backed, makes chests more likely, and makes traps less likely. Traps can still cost coins and Luck.</p></div></li>
           <li><span>8</span><div><strong>Day turns to night</strong><p>In-game day and night each last 5 minutes, with a gentle 30-second transition between them. It only changes the scenery—not luck, paths, or rewards.</p></div></li>
         </ol>
+        <button className="tutorial-tour-button" onClick={onTour}>▶ Take the quick interactive tour</button>
         <button className="tutorial-close-button" onClick={onClose}>Close guide &amp; keep exploring</button>
         <div className="modal-footnote">A cozy game with virtual coins only—never real-money gambling.</div>
       </motion.section>
@@ -831,75 +839,66 @@ function TutorialModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-type InstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
-};
+type InstallHelpPlatform = "ios" | "browser";
 
-function PwaInstallButton() {
-  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
-  const [helpPlatform, setHelpPlatform] = useState<"ios" | "browser" | null>(null);
-  const [installed, setInstalled] = useState(false);
+// Eases a displayed number toward its target so bars and counters glide instead of jumping.
+function useTweenedNumber(target: number, duration = 800) {
+  const [value, setValue] = useState(target);
+  const valueRef = useRef(target);
 
   useEffect(() => {
-    const onBeforeInstall = (event: Event) => {
-      event.preventDefault();
-      setInstallPrompt(event as InstallPromptEvent);
+    const from = valueRef.current;
+    if (from === target) return;
+    const startedAt = performance.now();
+    let frame = 0;
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - (1 - progress) ** 3;
+      valueRef.current = from + (target - from) * eased;
+      setValue(valueRef.current);
+      if (progress < 1) frame = window.requestAnimationFrame(step);
     };
-    const onInstalled = () => {
-      setInstalled(true);
-      setInstallPrompt(null);
-    };
+    frame = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(frame);
+  }, [target, duration]);
 
-    setInstalled(window.matchMedia("(display-mode: standalone)").matches);
-    window.addEventListener("beforeinstallprompt", onBeforeInstall);
-    window.addEventListener("appinstalled", onInstalled);
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
-  }, []);
+  return value;
+}
 
-  const install = async () => {
-    if (!installPrompt) {
-      setHelpPlatform(/iPhone|iPad|iPod/i.test(navigator.userAgent) ? "ios" : "browser");
-      return;
-    }
-    try {
-      await installPrompt.prompt();
-      const choice = await installPrompt.userChoice;
-      if (choice.outcome === "accepted") setInstalled(true);
-      setInstallPrompt(null);
-    } catch (error) {
-      console.error("Unable to start the app installation prompt.", error);
-      setInstallPrompt(null);
-      setHelpPlatform("browser");
-    }
+function PwaInstallButton({ onShowHelp }: { onShowHelp: (platform: InstallHelpPlatform) => void }) {
+  const { installed, isIos, install } = usePwaInstall();
+
+  const handleInstall = async () => {
+    const result = await install();
+    if (result === "manual") onShowHelp(isIos ? "ios" : "browser");
   };
 
   if (installed) return null;
 
   return (
-    <>
-      <button className="install-button" onClick={() => void install()} aria-label="Install Amazing Gambler on your phone">
-        <span aria-hidden="true">↓</span> <span>Install</span>
-      </button>
-      <AnimatePresence>
-        {helpPlatform && (
-          <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setHelpPlatform(null)}>
-            <motion.section className="install-help-modal" initial={{ y: 16 }} animate={{ y: 0 }} exit={{ y: 12 }} onClick={(event) => event.stopPropagation()}>
-              <button className="modal-close" onClick={() => setHelpPlatform(null)} aria-label="Close install instructions">×</button>
-              <span className="eyebrow">TAKE THE MAZE WITH YOU</span>
-              <h2>Add to your Home Screen</h2>
-              {helpPlatform === "ios"
-                ? <p>In Safari, tap <strong>Share</strong> <span aria-label="Share">↑</span>, choose <strong>Add to Home Screen</strong>, then tap <strong>Add</strong>.</p>
-                : <p>Open your browser menu and choose <strong>Install app</strong> or <strong>Add to Home screen</strong>. The exact wording can vary by browser.</p>}
-              <div className="install-help-note">Your adventure opens from its own icon, just like an app.</div>
-            </motion.section>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </>
+    <button className="install-button" onClick={() => void handleInstall()} aria-label="Install Amazing Gambler on your phone">
+      <span aria-hidden="true">↓</span> <span>Install</span>
+    </button>
+  );
+}
+
+function InstallHelpModal({ platform, onClose }: { platform: InstallHelpPlatform | null; onClose: () => void }) {
+  return (
+    <AnimatePresence>
+      {platform && (
+        <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+          <motion.section className="install-help-modal" initial={{ y: 16 }} animate={{ y: 0 }} exit={{ y: 12 }} onClick={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={onClose} aria-label="Close install instructions">×</button>
+            <span className="eyebrow">TAKE THE MAZE WITH YOU</span>
+            <h2>Add to your Home Screen</h2>
+            {platform === "ios"
+              ? <p>In Safari, tap <strong>Share</strong> <span aria-label="Share">↑</span>, choose <strong>Add to Home Screen</strong>, then tap <strong>Add</strong>.</p>
+              : <p>Open your browser menu and choose <strong>Install app</strong> or <strong>Add to Home screen</strong>. The exact wording can vary by browser.</p>}
+            <div className="install-help-note">Your adventure opens from its own icon, just like an app.</div>
+          </motion.section>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -1017,6 +1016,46 @@ export default function Game() {
     return { direction, label: directionLabels[direction] };
   });
   const avatarName = characterName;
+  const animatedLuck = useTweenedNumber(displayLuck, 900);
+  const [luckFlash, setLuckFlash] = useState<"up" | "down" | null>(null);
+  const previousLuckRef = useRef<number | null>(null);
+  const playTip = getPlayTip({ run: game.run, luck, money: game.money });
+  const [showTour, setShowTour] = useState(false);
+  const [installHelp, setInstallHelp] = useState<InstallHelpPlatform | null>(null);
+  const [curioTab, setCurioTab] = useState<CosmeticCategory>("frame");
+  const setTourModal = useCallback((modal: TourModal) => {
+    setShopOpen(modal === "shop");
+    setCharacterCollectionOpen(modal === "collection");
+  }, []);
+  const closeTour = useCallback((completed: boolean) => {
+    setShowTour(false);
+    setTutorialSeen(true);
+    try {
+      window.localStorage.setItem("amazing-gambler-tutorial-seen", "true");
+    } catch (error) {
+      console.error("Unable to save the tutorial preference.", error);
+    }
+    void completed;
+  }, []);
+
+  useEffect(() => {
+    const previous = previousLuckRef.current;
+    previousLuckRef.current = displayLuck;
+    if (previous === null || previous === displayLuck) return;
+    setLuckFlash(displayLuck > previous ? "up" : "down");
+    const timer = window.setTimeout(() => setLuckFlash(null), 1100);
+    return () => window.clearTimeout(timer);
+  }, [displayLuck]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolvePlayerCountry().then((resolved) => {
+      if (!cancelled && resolved) setCountry(resolved);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!sessionReady) return;
@@ -1282,7 +1321,7 @@ export default function Game() {
       console.error("Unable to save your explorer.", error);
       setToast("Your explorer could not be saved on this device.");
     }
-    if (!tutorialSeen) setShowTutorial(true);
+    if (!tutorialSeen) setShowTour(true);
     if (!["result", "approaching", "moving", "chest"].includes(game.phase)) game.set({ phase: "walking" });
   };
 
@@ -1440,7 +1479,7 @@ export default function Game() {
       return;
     }
     const options = game.junction.options;
-    const guaranteedWin = game.run < 4;
+    const guaranteedWin = game.run < GUARANTEED_ROUNDS;
     const backedOptions = options.filter((direction) => game.bets[direction] > 0);
     const actualDirection = guaranteedWin
       ? choosePredictedPath(backedOptions, game.bets, luck)
@@ -1448,7 +1487,7 @@ export default function Game() {
     const hit = guaranteedWin || game.bets[actualDirection] > 0;
     const dangerous = game.junction.hazards.includes(actualDirection);
     const predictedTrap = hit && dangerous;
-    const event = game.run < 4 ? "quiet" : rollEvent(luck);
+    const event = game.run < GUARANTEED_ROUNDS ? "quiet" : rollEvent(luck);
     const chestDrop = game.junction.chests[actualDirection] ?? null;
     const chest = chestDrop?.kind === "coins" ? chestDrop : null;
     const newCharacter = chestDrop?.kind === "character"
@@ -1575,11 +1614,16 @@ export default function Game() {
     saveProgress(nextProgress);
   };
 
+  const featuredCosmetic = cosmeticDefinitions[Math.floor(Date.now() / 86_400_000) % cosmeticDefinitions.length];
+  const cosmeticPrice = (cosmetic: (typeof cosmeticDefinitions)[number]) =>
+    cosmetic.id === featuredCosmetic.id ? Math.round(cosmetic.price * 0.75) : cosmetic.price;
+
   const collectCosmetic = (id: string) => {
     const cosmetic = cosmeticDefinitions.find((entry) => entry.id === id);
     if (!cosmetic) return;
     const isOwned = ownedCosmetics.includes(id);
-    if (!isOwned && game.money < cosmetic.price) {
+    const price = cosmeticPrice(cosmetic);
+    if (!isOwned && game.money < price) {
       setToast("A few more coins and this little treasure is yours.");
       window.setTimeout(() => setToast(""), 2400);
       return;
@@ -1588,7 +1632,7 @@ export default function Game() {
     const nextEquipped = { ...equipped, [cosmetic.category]: id };
     setOwnedCosmetics(nextOwned);
     setEquipped(nextEquipped);
-    if (!isOwned) game.set({ money: game.money - cosmetic.price });
+    if (!isOwned) game.set({ money: game.money - price });
     try {
       window.localStorage.setItem("amazing-gambler-cosmetics", JSON.stringify({
         owned: nextOwned,
@@ -1771,12 +1815,12 @@ export default function Game() {
             <span aria-label={`Time of day: ${worldPhase.toLowerCase()}`}>{worldPhase === "DAY" ? "☀" : worldPhase === "NIGHT" ? "☾" : "◐"} {worldPhase}</span>
           </span>
         </div>
-        <div className="hud-luck glass-panel" aria-label={`Luck ${displayLuck} percent; ${Math.round(luckInfluence(displayLuck) * 100)} percent influence`}>
-          <div className="hud-luck-top"><span>☘</span><span>LUCK</span><strong>{displayLuck}%</strong></div>
-          <div className="hud-luck-track"><div className="hud-luck-fill" style={{ width: `${Math.min(100, displayLuck)}%` }} /></div>
+        <div data-tour="luck" className={`hud-luck glass-panel ${luckFlash ? `hud-luck-${luckFlash}` : ""}`} aria-label={`Luck ${displayLuck} percent; ${Math.round(luckInfluence(displayLuck) * 100)} percent influence`}>
+          <div className="hud-luck-top"><span>☘</span><span>LUCK</span><strong>{Math.round(animatedLuck)}%</strong></div>
+          <div className="hud-luck-track"><div className="hud-luck-fill" style={{ width: `${Math.min(100, Math.max(0, animatedLuck))}%` }} /></div>
           {game.overflow && <span className="hud-overflow">FORTUNE READY</span>}
         </div>
-        <div className="hud-wallet glass-panel">
+        <div data-tour="wallet" className="hud-wallet glass-panel">
           {betLossCue && (
             <motion.span
               key={betLossCue.id}
@@ -1801,13 +1845,13 @@ export default function Game() {
       <div className={`world-title ${isRunPlaying ? "focus-mode-dimmed" : ""}`} aria-hidden={isRunPlaying}><span className="world-clover">{equippedIcon ?? "✳"}</span><span>AMAZING GAMBLER</span></div>
 
       <div className={`world-shortcuts ${isRunPlaying ? "focus-mode-dimmed" : ""}`} aria-hidden={isRunPlaying} inert={isRunPlaying}>
-        <button className="profile-button glass-panel" onClick={() => setShowProfile(true)} aria-label={`Open player profile, currently exploring as ${avatarName}`}>
-          <img src={avatar} alt="" /><span>{avatarName}</span><span className="profile-caret">⌄</span>
+        <button data-tour="profile" className="profile-button glass-panel" onClick={() => setShowProfile(true)} aria-label={`Open player profile, currently exploring as ${avatarName}`}>
+          <img src={avatar} alt="" />{equippedBadge && <span className="profile-badge" aria-hidden="true" title={equippedBadge.label}>{equippedBadge.icon}</span>}<span>{avatarName}</span><span className="profile-caret">⌄</span>
         </button>
-        <button className="glass-tool" onClick={() => setShopOpen(true)}>✦ <span>Curio cabinet</span></button>
-        <button className="glass-tool character-gallery-button" onClick={() => setCharacterCollectionOpen(true)} aria-label="Open character collection">♙ <span>Explorers</span></button>
+        <button data-tour="curio" className="glass-tool" onClick={() => setShopOpen(true)}>✦ <span>Curio cabinet</span></button>
+        <button data-tour="explorers" className="glass-tool character-gallery-button" onClick={() => setCharacterCollectionOpen(true)} aria-label="Open character collection">♙ <span>Explorers</span></button>
         <button className="glass-tool" onClick={() => setShowTutorial(true)} aria-label="Open game guide">? <span>Game guide</span></button>
-        <PwaInstallButton />
+        <PwaInstallButton onShowHelp={setInstallHelp} />
         <button
           className="glass-tool sound-toggle"
           data-sound-toggle
@@ -1821,7 +1865,11 @@ export default function Game() {
       </div>
 
       <section className={`next-junction-panel glass-panel ${isRunPlaying ? "next-junction-panel-fading" : ""}`} aria-label="Choose the explorer's path" aria-hidden={isRunPlaying}>
-        <div className="junction-panel-heading">
+              <div className={`tip-banner tip-${playTip.tone}`} role="note" key={playTip.text}>
+                <span className="tip-icon" aria-hidden="true">{playTip.icon}</span>
+                <span>{playTip.text}</span>
+              </div>
+              <div className="junction-panel-heading">
           <div>
             <span className="junction-kicker">THE NEXT JUNCTION <i>·</i> {currentOptions.length} paths ahead</span>
             <h1>Predict the explorer&apos;s next move</h1>
@@ -1833,7 +1881,7 @@ export default function Game() {
             {totalBet > 0 && <button className="undo-hold-button" onPointerDown={(event) => { if (event.button === 0) startUndoHold(); }} onPointerLeave={stopUndoHold} onClick={(event) => { if (event.detail === 0) undoLastCoin(); }} disabled={game.phase !== "choosing"} title="Tap to undo one coin; press and hold to undo faster" aria-label="Undo the last coin placed; press and hold to remove coins faster"><Icon name="undo" size={13} /><span>Undo last coin</span></button>}
           </div>
         </div>
-        <div className={`route-options options-${currentOptions.length}`}>
+        <div data-tour="routes" className={`route-options options-${currentOptions.length}`}>
           {optionNames.map(({ direction, label }) => (
             <button
               key={direction}
@@ -1872,7 +1920,7 @@ export default function Game() {
                       ? `${totalBet} virtual ${totalBet === 1 ? "coin" : "coins"} placed · no real money`
                       : "Your explorer is waiting for your hunch."}
           </span>
-          <button className="predict-button" data-sound="predict" onClick={resolveRound} disabled={game.phase !== "choosing" || !selectedCount || totalBet === 0 || totalBet > game.money || game.money <= 0}>
+          <button data-tour="go" className="predict-button" data-sound="predict" onClick={resolveRound} disabled={game.phase !== "choosing" || !selectedCount || totalBet === 0 || totalBet > game.money || game.money <= 0}>
             <span>{game.money === 0 ? `Wait for daily coins · ${dailyCountdown || "…"}` : game.phase === "choosing" ? "Watch the turn" : game.phase === "approaching" ? "The moment of fate…" : game.phase === "moving" ? "The explorer is on the move…" : game.phase === "result" ? "Read your turn report" : "Explorer on the move…"}</span>
             {game.phase === "choosing" && game.money > 0 && <Icon name="arrow" size={19} />}
             {game.phase !== "choosing" && <span className="button-ellipsis">···</span>}
@@ -1881,14 +1929,22 @@ export default function Game() {
         <div className="daily-footnote">Daily allowance: 100 free coins <span>·</span> a cozy game of chance, never real gambling</div>
       </section>
 
-      {playerNameLoaded && !playerName && !showProfile && (
+      {playerNameLoaded && !playerName && (
         <ProfileSetupModal onComplete={setPlayerNameState} />
       )}
+
+      <RankNotice rank={rankInfo.rank} total={rankInfo.total} playerName={playerName} />
+      <InstallNudge
+        eligible={Boolean(playerName) && tutorialSeen && !showTour && !showProfile && game.phase === "choosing" && game.run >= 3}
+        onShowHelp={setInstallHelp}
+      />
+      <InstallHelpModal platform={installHelp} onClose={() => setInstallHelp(null)} />
+      {showTour && <GuidedTour onModalChange={setTourModal} onClose={closeTour} />}
 
       <LeaderboardPanel playerName={playerName} resolveAvatar={leaderboardAvatar} onSelect={openLeaderboardProfile} focusMode={isRunPlaying} />
 
       <AnimatePresence>
-        {(showProfile || viewedEntry) && (
+        {((showProfile && playerName) || viewedEntry) && (
           <PlayerProfileModal
             avatar={avatar}
             characterName={characterName}
@@ -1909,7 +1965,7 @@ export default function Game() {
             viewing={viewedPlayer}
           />
         )}
-        {showTutorial && <TutorialModal onClose={closeTutorial} />}
+        {showTutorial && <TutorialModal onClose={closeTutorial} onTour={() => { setShowTutorial(false); setShowTour(true); }} />}
         {game.phase === "chest" && turnResult?.chestDrop && (
           <motion.div className="turn-report-backdrop chest-reveal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <motion.section className={`chest-reveal-card glass-panel ${turnResult.chestDrop.kind === "character" ? "chest-reveal-character" : "chest-reveal-coins"}`} role="dialog" aria-modal="true" aria-labelledby="chest-reveal-title" initial={{ y: 18, scale: .96 }} animate={{ y: 0, scale: 1 }}>
@@ -2007,30 +2063,47 @@ export default function Game() {
             <motion.section className="shop-modal" initial={{ y: 18 }} animate={{ y: 0 }} exit={{ y: 12 }} onClick={(event) => event.stopPropagation()}>
               <button className="modal-close" onClick={() => setShopOpen(false)} aria-label="Close curio cabinet">×</button>
               <span className="eyebrow">FOUND ALONG THE WAY</span>
-              <h2>A few little extras</h2>
-              <p className="shop-intro">Spend virtual coins on cosmetic keepsakes. Tap Buy to collect an item, then tap Equip to change the maze&apos;s look. Decorations never change luck, rewards, or path outcomes.</p>
+              <h2>Curio cabinet</h2>
+              <div className="curio-progress" aria-label={`${ownedCosmetics.length} of ${cosmeticDefinitions.length} collected`}>
+                <div className="curio-progress-bar"><i style={{ width: `${ownedCosmetics.length / cosmeticDefinitions.length * 100}%` }} /></div>
+                <span>{ownedCosmetics.length} / {cosmeticDefinitions.length} collected</span>
+              </div>
               <div className="shop-balance"><Icon name="coin" size={17} /> ${game.money.toLocaleString()} <span>in your pocket</span></div>
-              <div className="shop-items">
-                {cosmeticDefinitions.map((cosmetic) => {
+              <div className="curio-tabs" role="tablist" aria-label="Curio categories">
+                {(Object.keys(cosmeticCategoryLabels) as CosmeticCategory[]).map((category) => {
+                  const inCategory = cosmeticDefinitions.filter((cosmetic) => cosmetic.category === category);
+                  const ownedCount = inCategory.filter((cosmetic) => ownedCosmetics.includes(cosmetic.id)).length;
+                  return (
+                    <button key={category} role="tab" aria-selected={curioTab === category} className={curioTab === category ? "curio-tab-active" : ""} onClick={() => setCurioTab(category)}>
+                      {cosmeticCategoryLabels[category]} <small>{ownedCount}/{inCategory.length}</small>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="shop-items" role="tabpanel">
+                {cosmeticDefinitions.filter((cosmetic) => cosmetic.category === curioTab).map((cosmetic) => {
                   const isOwned = ownedCosmetics.includes(cosmetic.id);
                   const active = equipped[cosmetic.category] === cosmetic.id;
+                  const onSale = cosmetic.id === featuredCosmetic.id && !isOwned;
+                  const price = cosmeticPrice(cosmetic);
                   return (
-                    <article className="shop-item" key={cosmetic.id}>
+                    <article className={`shop-item shop-rarity-${cosmetic.rarity.toLowerCase()} ${isOwned ? "shop-item-owned" : ""}`} style={{ "--rarity-color": cosmeticRarityColors[cosmetic.rarity] } as React.CSSProperties} key={cosmetic.id}>
+                      {onSale && <span className="shop-sale">TODAY −25%</span>}
                       <span className="shop-item-icon">{cosmetic.icon}</span>
-                      <div className="shop-item-copy"><strong>{cosmetic.label}</strong><span>{cosmetic.description}</span></div>
+                      <div className="shop-item-copy"><strong>{cosmetic.label}</strong><em className="shop-rarity-label">{cosmetic.rarity}</em><span>{cosmetic.description}</span></div>
                       <button
                         data-sound={isOwned ? "reward" : "purchase"}
                         className={active ? "shop-item-active" : ""}
                         onClick={() => collectCosmetic(cosmetic.id)}
-                        disabled={!isOwned && game.money < cosmetic.price}
+                        disabled={!isOwned && game.money < price}
                       >
-                        {active ? "Wearing" : isOwned ? "Equip" : `$${cosmetic.price}`}
+                        {active ? "Wearing" : isOwned ? "Equip" : onSale ? <><s>${cosmetic.price}</s> ${price}</> : `$${price}`}
                       </button>
                     </article>
                   );
                 })}
               </div>
-              <div className="shop-footnote">Golden halo decorates your explorer · Moonlit maze changes the scenery · Starlight trail changes the path effect · Lucky compass changes the title mark · Pathfinder badge adds a keepsake. Visuals only, no gameplay advantage.</div>
+              <div className="shop-footnote">Cosmetics only, never a gameplay advantage. One curio is on sale every day.</div>
             </motion.section>
           </motion.div>
         )}

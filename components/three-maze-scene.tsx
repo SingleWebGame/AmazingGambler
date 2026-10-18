@@ -3,8 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import {
+  cosmeticHalos,
+  defaultTrailColors,
   directionLabels,
   directionVectors,
+  trailPalettes,
   type ChestDrop,
   type Direction,
   type Junction,
@@ -646,10 +649,10 @@ function buildExplorer(scene: THREE.Scene, avatar: string, frame: string, charac
     explorer.add(foot);
   }
   const halo = new THREE.Mesh(
-    new THREE.TorusGeometry(frame === "gold-frame" ? 0.66 : 0.52, 0.035, 5, 16),
+    new THREE.TorusGeometry(cosmeticHalos[frame]?.radius ?? 0.52, 0.035, 5, 16),
     new THREE.MeshStandardMaterial({
-      color: frame === "gold-frame" ? "#e4bd6a" : "#f0dfaf",
-      emissive: "#b18a45",
+      color: cosmeticHalos[frame]?.color ?? "#f0dfaf",
+      emissive: cosmeticHalos[frame]?.glow ?? "#b18a45",
       emissiveIntensity: 0.3,
       roughness: 0.7,
     }),
@@ -1137,6 +1140,7 @@ export default function ThreeMazeScene({
       }
       const biome = environmentForRoom(current.junction.id + 1);
       const moonlit = current.theme === "moonlit-maze";
+      if (current.theme === "sunlit-maze") nightBlend = 0;
       daySky.set(moonlit ? biome.skyNight : biome.skyDay);
       nightSky.set(moonlit ? "#101a2a" : biome.skyNight);
       skyColor.lerpColors(daySky, nightSky, nightBlend);
@@ -1307,7 +1311,8 @@ export default function ThreeMazeScene({
     assets.fireflies.forEach(({ mesh }, index) => {
       const material = mesh.material;
       if (material instanceof THREE.MeshBasicMaterial) {
-        material.color.set(trail === "starlight-trail" ? "#d6eef0" : ["#ffdf8c", "#d7f3b5", "#fff0ba"][index % 3]);
+        const palette = trailPalettes[trail]?.colors ?? defaultTrailColors;
+        material.color.set(palette[index % palette.length]);
       }
     });
   }, [trail]);
@@ -1374,7 +1379,7 @@ export default function ThreeMazeScene({
       )}
       <div className="scene-caption">
         <span><span className="caption-dot" /> {phase === "choosing" ? "Choose a glowing path" : "A new adventure unfolds"}</span>
-        <span className="caption-mystery"><span className="scene-key">A–D</span> to choose · {trail === "starlight-trail" ? "follow the starlight" : "follow the fireflies"}</span>
+        <span className="caption-mystery"><span className="scene-key">A–D</span> to choose · {trailPalettes[trail]?.caption ?? "follow the fireflies"}</span>
       </div>
     </div>
   );

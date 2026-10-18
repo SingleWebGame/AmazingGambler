@@ -27,6 +27,8 @@ export type ChestDrop =
 
 export type CosmeticCategory = "frame" | "theme" | "trail" | "icon" | "badge";
 
+export type CosmeticRarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary";
+
 export interface CosmeticDefinition {
   id: string;
   label: string;
@@ -34,7 +36,11 @@ export interface CosmeticDefinition {
   icon: string;
   price: number;
   description: string;
+  rarity: CosmeticRarity;
 }
+
+// The opening predictions are guaranteed wins so new explorers can learn the controls safely.
+export const GUARANTEED_ROUNDS = 5;
 
 export interface TrapDefinition {
   id: string;
@@ -98,12 +104,60 @@ export const itemDefinitions: ItemDefinition[] = [
 ];
 
 export const cosmeticDefinitions: CosmeticDefinition[] = [
-  { id: "gold-frame", label: "Golden halo", category: "frame", icon: "◉", price: 75, description: "A little shine for your explorer" },
-  { id: "moonlit-maze", label: "Moonlit maze", category: "theme", icon: "☾", price: 120, description: "Follow the paths after dark" },
-  { id: "starlight-trail", label: "Starlight trail", category: "trail", icon: "✦", price: 90, description: "Leave a little sparkle behind" },
-  { id: "lucky-compass", label: "Lucky compass", category: "icon", icon: "⌖", price: 40, description: "A new mark for your journey" },
-  { id: "pathfinder-badge", label: "Pathfinder badge", category: "badge", icon: "⚑", price: 180, description: "A badge for brave guessers" },
+  { id: "gold-frame", label: "Golden halo", category: "frame", icon: "◉", price: 75, rarity: "Common", description: "A little shine for your explorer" },
+  { id: "emerald-halo", label: "Emerald halo", category: "frame", icon: "◎", price: 110, rarity: "Uncommon", description: "A leafy green ring of calm" },
+  { id: "rose-halo", label: "Rose halo", category: "frame", icon: "❂", price: 140, rarity: "Uncommon", description: "A soft blush glow overhead" },
+  { id: "frost-halo", label: "Frost halo", category: "frame", icon: "❄", price: 260, rarity: "Rare", description: "A crisp, icy ring that hums" },
+  { id: "solar-crown", label: "Solar crown", category: "frame", icon: "☀", price: 650, rarity: "Epic", description: "A wide blazing crown of light" },
+  { id: "moonlit-maze", label: "Moonlit maze", category: "theme", icon: "☾", price: 120, rarity: "Uncommon", description: "Follow the paths after dark" },
+  { id: "sunlit-maze", label: "Golden noon", category: "theme", icon: "☼", price: 150, rarity: "Uncommon", description: "The maze stays bright all day" },
+  { id: "starlight-trail", label: "Starlight trail", category: "trail", icon: "✦", price: 90, rarity: "Common", description: "Leave a little sparkle behind" },
+  { id: "blossom-trail", label: "Blossom trail", category: "trail", icon: "✿", price: 120, rarity: "Uncommon", description: "Petals drift in your wake" },
+  { id: "ember-trail", label: "Ember trail", category: "trail", icon: "♨", price: 190, rarity: "Rare", description: "Warm sparks follow every step" },
+  { id: "aurora-trail", label: "Aurora trail", category: "trail", icon: "≋", price: 420, rarity: "Epic", description: "Northern lights ripple behind you" },
+  { id: "lucky-compass", label: "Lucky compass", category: "icon", icon: "⌖", price: 40, rarity: "Common", description: "A new mark for your journey" },
+  { id: "wild-clover", label: "Wild clover", category: "icon", icon: "⚘", price: 70, rarity: "Common", description: "A little green wish for luck" },
+  { id: "sun-seal", label: "Sun seal", category: "icon", icon: "❋", price: 160, rarity: "Uncommon", description: "A warm seal for bright days" },
+  { id: "crown-mark", label: "Crown mark", category: "icon", icon: "♛", price: 480, rarity: "Rare", description: "For explorers who aim high" },
+  { id: "star-medal", label: "Star medal", category: "icon", icon: "✪", price: 1100, rarity: "Epic", description: "A medal shaped like a wish" },
+  { id: "clover-badge", label: "Clover badge", category: "badge", icon: "☘", price: 80, rarity: "Common", description: "Worn by the hopeful" },
+  { id: "pathfinder-badge", label: "Pathfinder badge", category: "badge", icon: "⚑", price: 180, rarity: "Uncommon", description: "A badge for brave guessers" },
+  { id: "keeper-badge", label: "Keeper badge", category: "badge", icon: "◈", price: 320, rarity: "Rare", description: "For those who guard their coins" },
+  { id: "maze-master-badge", label: "Maze master", category: "badge", icon: "♜", price: 800, rarity: "Epic", description: "You have walked every turn" },
+  { id: "legend-badge", label: "Forever legend", category: "badge", icon: "★", price: 1800, rarity: "Legendary", description: "The rarest keepsake in the cabinet" },
 ];
+
+export const cosmeticCategoryLabels: Record<CosmeticCategory, string> = {
+  frame: "Halos",
+  theme: "Skies",
+  trail: "Trails",
+  icon: "Marks",
+  badge: "Badges",
+};
+
+export const cosmeticRarityColors: Record<CosmeticRarity, string> = {
+  Common: "#b4bcc4",
+  Uncommon: "#5fc84a",
+  Rare: "#3fa9f5",
+  Epic: "#b05cf0",
+  Legendary: "#f5a02d",
+};
+
+export const cosmeticHalos: Record<string, { radius: number; color: string; glow: string }> = {
+  "gold-frame": { radius: 0.66, color: "#e4bd6a", glow: "#b18a45" },
+  "emerald-halo": { radius: 0.66, color: "#7fd18b", glow: "#2f8a4a" },
+  "rose-halo": { radius: 0.66, color: "#f2a0bd", glow: "#b04f78" },
+  "frost-halo": { radius: 0.72, color: "#bfe8ff", glow: "#4a9ccc" },
+  "solar-crown": { radius: 0.86, color: "#ffd25a", glow: "#e0871c" },
+};
+
+export const trailPalettes: Record<string, { colors: string[]; caption: string }> = {
+  "starlight-trail": { colors: ["#d6eef0", "#d6eef0", "#d6eef0"], caption: "follow the starlight" },
+  "blossom-trail": { colors: ["#ffb7d1", "#ffd9e6", "#ff9ec2"], caption: "follow the petals" },
+  "ember-trail": { colors: ["#ff9a52", "#ffd27a", "#ff6b4a"], caption: "follow the embers" },
+  "aurora-trail": { colors: ["#7df5d0", "#8fb8ff", "#d99bff"], caption: "follow the aurora" },
+};
+export const defaultTrailColors = ["#ffdf8c", "#d7f3b5", "#fff0ba"];
 
 export const trapDefinitions: TrapDefinition[] = [
   { id: "pit", label: "Pit", icon: "◯", survivalDifficulty: 0.05, moneyPenalty: 8, luckPenalty: 5 },

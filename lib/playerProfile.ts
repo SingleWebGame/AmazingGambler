@@ -1,3 +1,5 @@
+import { countryFromTimeZone } from "./timezoneCountries";
+
 export const PLAYER_NAME_KEY = "playerName";
 export const PLAYER_NAME_MIN = 3;
 export const PLAYER_NAME_MAX = 20;
@@ -65,14 +67,27 @@ export function clearPlayerName(): void {
 }
 
 const COUNTRY_KEY = "playerCountry";
+const COUNTRY_SOURCE_KEY = "playerCountrySource";
 const COUNTRY_CODE = /^[A-Z]{2}$/;
 
-function detectCountry(): string | null {
+type CountrySource = "geo" | "timezone" | "language";
+
+function detectCountryFromTimeZone(): string | null {
+  try {
+    return countryFromTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  } catch {
+    return null;
+  }
+}
+
+// Weakest signal: the language setting often reflects device defaults, not where the player lives.
+function detectCountryFromLanguage(): string | null {
   if (typeof navigator === "undefined") return null;
   for (const language of navigator.languages ?? [navigator.language]) {
     try {
-      const region = new Intl.Locale(language).maximize().region;
-      if (region && COUNTRY_CODE.test(region)) return region;
+      const locale = new Intl.Locale(language);
+      // Only trust an explicit region ("fr-SN"); maximize() would just guess a likely region.
+      if (locale.region && COUNTRY_CODE.test(locale.region)) return locale.region;
     } catch {
       // Ignore malformed locale tags.
     }
@@ -80,20 +95,48 @@ function detectCountry(): string | null {
   return null;
 }
 
-// Auto-set from the browser locale and cached; never typed by the player, so it cannot carry user input.
+function cacheCountry(code: string, source: CountrySource) {
+  try {
+    const store = storage();
+    store?.setItem(COUNTRY_KEY, code);
+    store?.setItem(COUNTRY_SOURCE_KEY, source);
+  } catch {
+    // Storage unavailable; detection still works next load.
+  }
+}
+
+// Instant, offline guess: time zone first, then an explicit language region. Never typed by the player.
 export function getPlayerCountry(): string | null {
   const store = storage();
   const saved = store?.getItem(COUNTRY_KEY);
-  if (saved && COUNTRY_CODE.test(saved)) return saved;
-  const detected = detectCountry();
-  if (detected) {
-    try {
-      store?.setItem(COUNTRY_KEY, detected);
-    } catch {
-      // Storage unavailable; detection still works next load.
-    }
+  const source = store?.getItem(COUNTRY_SOURCE_KEY);
+  if (saved && COUNTRY_CODE.test(saved) && source === "geo") return saved;
+  const guess = detectCountryFromTimeZone() ?? detectCountryFromLanguage();
+  if (guess) {
+    cacheCountry(guess, detectCountryFromTimeZone() ? "timezone" : "language");
+    return guess;
   }
-  return detected;
+  return saved && COUNTRY_CODE.test(saved) ? saved : null;
+}
+
+// Authoritative check: the server reads the visitor's country from their IP address.
+// Falls back to the local guess when the server cannot tell (for example on localhost).
+export async function resolvePlayerCountry(): Promise<string | null> {
+  const local = getPlayerCountry();
+  if (storage()?.getItem(COUNTRY_SOURCE_KEY) === "geo") return local;
+  try {
+    const response = await fetch("/api/country", { cache: "no-store" });
+    if (!response.ok) return local;
+    const data: unknown = await response.json();
+    const code = typeof data === "object" && data !== null ? (data as { country?: unknown }).country : null;
+    if (typeof code === "string" && COUNTRY_CODE.test(code)) {
+      cacheCountry(code, "geo");
+      return code;
+    }
+  } catch {
+    // Offline or blocked; the local guess is still used.
+  }
+  return local;
 }
 
 export function countryFlag(code: string | null | undefined): string {

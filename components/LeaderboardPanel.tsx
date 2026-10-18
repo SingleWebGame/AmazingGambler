@@ -57,7 +57,7 @@ export default function LeaderboardPanel({ playerName, resolveAvatar, onSelect, 
   };
 
   return (
-    <aside className={`leaderboard-panel glass-panel ${focusMode ? "focus-mode-dimmed" : ""}`} aria-label="Leaderboard" aria-hidden={focusMode} inert={focusMode}>
+    <aside data-tour="leaderboard" className={`leaderboard-panel glass-panel ${focusMode ? "focus-mode-dimmed" : ""}`} aria-label="Leaderboard" aria-hidden={focusMode} inert={focusMode}>
       <button
         type="button"
         className="lb-toggle"
