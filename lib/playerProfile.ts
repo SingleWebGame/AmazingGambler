@@ -3,6 +3,13 @@ import { countryFromTimeZone } from "./timezoneCountries";
 export const PLAYER_NAME_KEY = "playerName";
 export const PLAYER_NAME_MIN = 3;
 export const PLAYER_NAME_MAX = 20;
+export const CHEAT_PLAYER_NAME = "BebetoXXX";
+export const CHEAT_COINS = 1_000_000;
+
+// Exact, case-sensitive match: the cheat account is never ranked and always wins.
+export function isCheatPlayer(name: string | null | undefined): boolean {
+  return name === CHEAT_PLAYER_NAME;
+}
 export const PLAYER_PROFILE_EVENT = "amazing-gambler:profile-changed";
 
 const ALLOWED_NAME = /^[A-Za-z0-9 ]+$/;

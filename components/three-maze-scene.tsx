@@ -1090,7 +1090,11 @@ export default function ThreeMazeScene({
       }
       const indicatorRect = renderer.domElement.getBoundingClientRect();
       const panelTop = document.querySelector<HTMLElement>(".next-junction-panel")?.getBoundingClientRect().top;
-      const shortcutsBottom = document.querySelector<HTMLElement>(".world-shortcuts")?.getBoundingClientRect().bottom;
+      const shortcutsRect = document.querySelector<HTMLElement>(".world-shortcuts")?.getBoundingClientRect();
+      let hudBottom = 0;
+      document.querySelectorAll<HTMLElement>(".immersive-hud > *").forEach((element) => {
+        hudBottom = Math.max(hudBottom, element.getBoundingClientRect().bottom);
+      });
       const indicatorPosition = new THREE.Vector3();
       current.junction.options.forEach((direction) => {
         const indicator = assets.routeIndicatorElements[direction];
@@ -1117,7 +1121,10 @@ export default function ThreeMazeScene({
         const x = (indicatorPosition.x * 0.5 + 0.5) * indicatorRect.width;
         const y = (-indicatorPosition.y * 0.5 + 0.5) * indicatorRect.height;
         const clampedX = Math.max(horizontalMargin, Math.min(indicatorRect.width - horizontalMargin, x));
-        const minY = Math.max(verticalMargin, (shortcutsBottom ?? 0) - indicatorRect.top + 18);
+        // Only keep clear of the tool rail when the label would actually sit beside it.
+        const overlapsRail = shortcutsRect !== undefined && clampedX - 56 < shortcutsRect.right;
+        const topLimit = Math.max(hudBottom, overlapsRail ? shortcutsRect.bottom : 0);
+        const minY = Math.max(verticalMargin, topLimit - indicatorRect.top + 18);
         const maxY = Math.max(minY, Math.min(indicatorRect.height - verticalMargin, (panelTop ?? indicatorRect.bottom) - indicatorRect.top - 38));
         const clampedY = Math.max(minY, Math.min(maxY, y));
         const edge = x < horizontalMargin ? "◀" : x > indicatorRect.width - horizontalMargin ? "▶" : y < minY ? "▲" : y > maxY ? "▼" : "";

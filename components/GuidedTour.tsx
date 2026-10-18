@@ -22,7 +22,7 @@ const steps: TourStep[] = [
     id: "welcome",
     target: null,
     title: "Welcome, explorer! 👋",
-    body: `Here's a 1-minute tour of the screen. First tip: your first ${GUARANTEED_ROUNDS} predictions are guaranteed wins, so play freely while you learn.`,
+    body: `Here's a 1-minute tour of the screen. Your first ${GUARANTEED_ROUNDS} rounds are guaranteed wins. Place a bigger bet on one path to make the most of them!`,
   },
   {
     id: "wallet",
@@ -97,7 +97,7 @@ const steps: TourStep[] = [
     id: "tips",
     target: null,
     title: "Pro tips 💡",
-    body: "When Luck is low, place small bets to keep losses small. Never bet everything on one turn, and remember that after your first 5 rounds the path is truly random.",
+    body: `Your first ${GUARANTEED_ROUNDS} rounds are guaranteed wins. Place a bigger bet on one path to boost your payout. After round ${GUARANTEED_ROUNDS}, outcomes are random; when Luck is low, stick to small bets.`,
   },
 ];
 

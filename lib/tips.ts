@@ -16,7 +16,7 @@ export function getPlayTip({ run, luck, money }: { run: number; luck: number; mo
     return {
       icon: "🍀",
       tone: "bless",
-      text: `Beginner's blessing: your first ${GUARANTEED_ROUNDS} predictions always win. ${left} left, so experiment freely!`,
+      text: `Guaranteed wins: your first ${GUARANTEED_ROUNDS} rounds always hit. Place a bigger bet on one path to earn more! ${left} left.`,
     };
   }
   if (run === GUARANTEED_ROUNDS) {

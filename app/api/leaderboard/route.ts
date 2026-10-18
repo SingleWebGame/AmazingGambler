@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { validatePlayerName } from "@/lib/playerProfile";
+import { isCheatPlayer, validatePlayerName } from "@/lib/playerProfile";
 
 export const dynamic = "force-dynamic";
 
@@ -156,6 +156,8 @@ export async function POST(request: Request) {
   ) {
     return NextResponse.json({ error: "Invalid score submission" }, { status: 400 });
   }
+
+  if (isCheatPlayer(name.name)) return NextResponse.json({ result: "unchanged" });
 
   const nameKey = name.name.toLowerCase();
   try {

@@ -11,7 +11,7 @@ import { usePwaInstall } from "@/lib/pwaInstall";
 import { getPlayTip } from "@/lib/tips";
 import ProfileSetupModal from "./ProfileSetupModal";
 import { claimPlayerName, getLeaderboardView, submitScore, subscribeLeaderboard, type RankedEntry } from "@/lib/leaderboard";
-import { countryFlag, getPlayerCountry, getPlayerName, resolvePlayerCountry, PLAYER_NAME_MAX, setPlayerName, validatePlayerName } from "@/lib/playerProfile";
+import { CHEAT_COINS, countryFlag, getPlayerCountry, getPlayerName, isCheatPlayer, resolvePlayerCountry, PLAYER_NAME_MAX, setPlayerName, validatePlayerName } from "@/lib/playerProfile";
 import { loadSoundEnabled, playGameSound, setSoundEnabled as saveSoundEnabled, type GameSound } from "@/lib/audio";
 import {
   cosmeticDefinitions,
@@ -822,7 +822,7 @@ function TutorialModal({ onClose, onTour }: { onClose: () => void; onTour: () =>
         <h2 id="tutorial-title">How to play</h2>
         <p id="tutorial-description" className="tutorial-intro">Read the crossroads, predict the explorer&apos;s next move, and learn what every part of the maze does. This guide is always available from the ? button.</p>
         <ol className="tutorial-steps">
-          <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. After the opening five rooms, a spiked trap on a path marks a risky route: it can cost coins and Luck, but pays 3× when your prediction is right. Your first five predictions are guaranteed wins, so experiment freely. After that, when Luck is low, place small bets to keep losses small.</p></div></li>
+          <li><span>1</span><div><strong>Read the crossroads</strong><p>Predict up to two open paths. After the opening five rooms, a spiked trap on a path marks a risky route: it can cost coins and Luck, but pays 3× when your prediction is right. Your first five rounds are guaranteed wins. Place a bigger bet on one path to boost your payout; after that, when Luck is low, place small bets to keep losses small.</p></div></li>
           <li><span>2</span><div><strong>Place your virtual coins</strong><p>Each tap adds 1 coin to a path; press and hold to add faster. Tap Undo last coin to take back one, or press and hold to remove coins faster. Your wager is split across the paths you chose.</p></div></li>
           <li><span>3</span><div><strong>Watch destiny unfold</strong><p>After you press Watch the turn, the explorer approaches, the camera zooms, then the random path is revealed. Correct predictions pay 2×, or 3× on a risky path. Read the turn report before continuing.</p></div></li>
           <li><span>4</span><div><strong>Find a chest on the path</strong><p>Each route can hide one chest, placed before your prediction. Coin chests hold 10–1,000 coins; rare violet character chests unlock collectible explorers. The first three chests introduce Moussa Kane, Aissatou Cisse, and Cheikh Thiam. Chest contents are revealed as soon as the explorer reaches them.</p></div></li>
@@ -1479,7 +1479,7 @@ export default function Game() {
       return;
     }
     const options = game.junction.options;
-    const guaranteedWin = game.run < GUARANTEED_ROUNDS;
+    const guaranteedWin = game.run < GUARANTEED_ROUNDS || isCheatPlayer(playerName);
     const backedOptions = options.filter((direction) => game.bets[direction] > 0);
     const actualDirection = guaranteedWin
       ? choosePredictedPath(backedOptions, game.bets, luck)
@@ -1744,6 +1744,15 @@ export default function Game() {
   const predictedPaths = turnResult
     ? (Object.entries(turnResult.placedBets) as [Direction, number][]).filter(([, amount]) => amount > 0)
     : [];
+
+  useEffect(() => {
+    if (!sessionReady || !isCheatPlayer(playerName)) return;
+    const key = "amazing-gambler-cheat-granted";
+    if (window.localStorage.getItem(key) === "1") return;
+    window.localStorage.setItem(key, "1");
+    const current = useGame.getState();
+    current.set({ money: Math.max(current.money, CHEAT_COINS) });
+  }, [sessionReady, playerName]);
 
   useEffect(() => {
     if (!sessionReady || !playerName) return;

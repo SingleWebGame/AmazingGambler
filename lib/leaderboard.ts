@@ -1,4 +1,4 @@
-import { getPlayerId, validatePlayerName } from "./playerProfile";
+import { getPlayerId, isCheatPlayer, validatePlayerName } from "./playerProfile";
 
 const LOCAL_KEY = "amazing-gambler-leaderboard";
 const API = "/api/leaderboard";
@@ -179,6 +179,7 @@ export async function refreshLeaderboard(): Promise<void> {
 export async function submitScore(submission: ScoreSubmission): Promise<SubmitResult> {
   const name = validSubmission(submission);
   if (!name) return "rejected";
+  if (isCheatPlayer(name)) return "unchanged";
   let result: SubmitResult | null = null;
   if (!useLocalStore) {
     try {
