@@ -674,13 +674,16 @@ function PlayerProfileModal({
           <div className="player-profile-header">
             <button className="modal-close" onClick={onClose} aria-label="Close explorer profile">×</button>
             <span className="eyebrow">LEADERBOARD EXPLORER</span>
-            <h2 id="profile-title">Your explorer profile</h2>
+            <h2 id="profile-title">Explorer Profile</h2>
             <div className="profile-identity">
               <img src={viewing.avatar} alt="" />
-              <div><span>{viewing.characterName.toUpperCase()}</span><strong>{viewing.name}</strong></div>
+              <div>
+                <span>{viewing.characterName.toUpperCase()}</span>
+                <small className="profile-player-count">{totalPlayers} player{totalPlayers === 1 ? "" : "s"} on leaderboard</small>
+                <strong>{viewing.name} <b className="profile-rank-badge" aria-label={`Rank ${viewing.rank}`}>#{viewing.rank}</b></strong>
+              </div>
             </div>
             <div className="profile-rank-row">
-              <span>#{viewing.rank} on the leaderboard</span>
               <span><span className="profile-flag" aria-hidden="true">{countryFlag(viewing.country)}</span>{viewing.country ?? "Unknown"}</span>
             </div>
             <div className="result-grid profile-stats">
@@ -700,18 +703,21 @@ function PlayerProfileModal({
         <div className="player-profile-header">
           {canClose && <button className="modal-close" onClick={onClose} aria-label="Close player profile">×</button>}
           <span className="eyebrow">YOUR FOREVER MAZE ADVENTURE</span>
-          <h2 id="profile-title">Your explorer profile</h2>
+          <h2 id="profile-title">Explorer Profile</h2>
           <div className="profile-identity">
             <img src={avatar} alt="" />
-            <div><span>EXPLORING AS</span><strong>{characterName}</strong></div>
+            <div>
+              <span>EXPLORING AS</span>
+              <strong>{characterName}{rank && <> <b className="profile-rank-badge" aria-label={`Rank ${rank}`}>#{rank}</b></>}</strong>
+              <small className="profile-player-count">{totalPlayers} player{totalPlayers === 1 ? "" : "s"} on leaderboard</small>
+            </div>
           </div>
           <PlayerNameEditor playerName={playerName} onSaved={onNameSaved} />
           <div className="profile-rank-row">
-            <span>{rank ? `#${rank} of ${totalPlayers} on the leaderboard` : "Not ranked yet"}</span>
             <span><span className="profile-flag" aria-hidden="true">{countryFlag(country)}</span>{country ?? "Unknown"}</span>
           </div>
           <div className="result-grid profile-stats">
-            <div><span>MONEY EARNED</span><strong>${formatCoinBalance(progress.totalEarned)}</strong></div>
+            <div><span>TOTAL COINS EARNED</span><strong>${formatCoinBalance(progress.totalEarned)}</strong></div>
             <div><span>LONGEST RUN</span><strong>{progress.longestRun} <small>rooms</small></strong></div>
             <div><span>HIGHEST LUCK</span><strong>{progress.highestLuck}%</strong></div>
             <div><span>CHESTS FOUND</span><strong>{progress.chestsCollected}</strong></div>
@@ -1648,7 +1654,7 @@ export default function Game() {
     context.lineTo(1128, 205);
     context.stroke();
     const stats = [
-      ["MONEY EARNED", `$${game.progress.totalEarned.toLocaleString()}`],
+      ["TOTAL COINS EARNED", `$${game.progress.totalEarned.toLocaleString()}`],
       ["LONGEST RUN", `${game.progress.longestRun} rooms`],
       ["HIGHEST LUCK", `${game.progress.highestLuck}%`],
       ["CHESTS FOUND", `${game.progress.chestsCollected}`],

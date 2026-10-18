@@ -146,6 +146,7 @@ export async function POST(request: Request) {
   const country = typeof body.country === "string" && COUNTRY_PATTERN.test(body.country) ? body.country : "";
   const charactersUnlocked = body.charactersUnlocked;
   const roomNumber = body.roomNumber;
+  const claimOnly = body.claimOnly === true;
   if (
     typeof playerId !== "string" || !ID_PATTERN.test(playerId) ||
     !name.valid ||
@@ -173,16 +174,20 @@ export async function POST(request: Request) {
     if (typeof previous === "string" && previous.toLowerCase() !== nameKey) writes.push(["HDEL", NAMES, previous.toLowerCase()]);
 
     const isNew = existingScore === null || existingScore === undefined;
-    const improved = isNew || score > Number(existingScore);
+    // The board follows the current coin balance, so a player who loses coins moves down.
+    const changed = !claimOnly && (isNew || score !== Number(existingScore));
     writes.push(["HSET", profileKey(playerId), "name", name.name, "characterId", characterId, "country", country]);
-    if (improved) {
+    if (!claimOnly) {
+      writes.push(["HSET", profileKey(playerId), "charactersUnlocked", charactersUnlocked, "roomNumber", roomNumber]);
+    }
+    if (changed || (claimOnly && isNew)) {
       writes.push(
         ["ZADD", SCORES, score, playerId],
-        ["HSET", profileKey(playerId), "charactersUnlocked", charactersUnlocked, "roomNumber", roomNumber, "updatedAt", Date.now()],
+        ["HSET", profileKey(playerId), "updatedAt", Date.now()],
       );
     }
     await redis(writes);
-    return NextResponse.json({ result: isNew ? "created" : improved ? "updated" : "unchanged" });
+    return NextResponse.json({ result: isNew ? "created" : changed ? "updated" : "unchanged" });
   } catch {
     return NextResponse.json({ error: "Leaderboard unavailable" }, { status: 502 });
   }

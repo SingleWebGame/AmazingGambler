@@ -25,6 +25,7 @@ export type ScoreSubmission = {
   country: string | null;
   charactersUnlocked: number;
   roomNumber: number;
+  claimOnly?: boolean;
 };
 export type SubmitResult = "created" | "updated" | "unchanged" | "rejected" | "name_taken" | "offline";
 
@@ -104,18 +105,20 @@ function submitLocal(submission: ScoreSubmission, name: string): SubmitResult {
     });
     result = "created";
   } else {
-    const improved = submission.score > existing.score;
+    const changed = !submission.claimOnly && submission.score !== existing.score;
     existing.playerId = playerId;
     existing.playerName = name;
     existing.characterId = submission.characterId;
     existing.country = safeCountry;
-    if (improved) {
-      existing.score = submission.score;
+    if (!submission.claimOnly) {
       existing.charactersUnlocked = submission.charactersUnlocked;
       existing.roomNumber = submission.roomNumber;
+    }
+    if (changed) {
+      existing.score = submission.score;
       existing.updatedAt = Date.now();
     }
-    result = improved ? "updated" : "unchanged";
+    result = changed ? "updated" : "unchanged";
   }
   try {
     window.localStorage.setItem(LOCAL_KEY, JSON.stringify(sortEntries(entries).slice(0, MAX_LOCAL_ENTRIES)));
@@ -171,8 +174,8 @@ export async function refreshLeaderboard(): Promise<void> {
   publish(localView());
 }
 
-// Best Score Mode: each player id owns one record; score, room, and unlocked explorers only change on a higher
-// score, while the name, explorer, and country shown always stay current.
+// Each player id owns exactly one record that always reflects their current coin balance, so resubmitting
+// never creates duplicates and a player who loses coins moves down the board.
 export async function submitScore(submission: ScoreSubmission): Promise<SubmitResult> {
   const name = validSubmission(submission);
   if (!name) return "rejected";
@@ -206,7 +209,7 @@ export async function claimPlayerName(
   playerName: string,
   extras: Pick<ScoreSubmission, "characterId" | "country"> = { characterId: "pip", country: null },
 ): Promise<SubmitResult> {
-  return submitScore({ playerName, score: 0, charactersUnlocked: 1, roomNumber: 1, ...extras });
+  return submitScore({ playerName, score: 0, charactersUnlocked: 1, roomNumber: 1, claimOnly: true, ...extras });
 }
 
 // Notifies on changes made in this tab, other tabs, and (through polling) other players.

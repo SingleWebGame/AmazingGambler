@@ -701,6 +701,7 @@ body {
 .profile-identity div { display: grid; gap: 4px; text-align: left; }
 .profile-identity div span, .profile-collection-label { color: #8b917f; font: 8px var(--mono); letter-spacing: .8px; }
 .profile-identity div strong { color: #f4ecd4; font: 600 18px var(--serif); }
+.profile-player-count { color: #aeb5aa; font: 10px var(--sans); }
 .profile-stats { gap: 10px 14px; padding: 12px 15px; border: 1px solid #dbd2c1; border-radius: 9px; background: #f3eddd; text-align: left; }
 .profile-stats div strong { font-size: 17px; }
 .profile-actions { margin-top: 12px; }
@@ -1103,6 +1104,9 @@ body {
 .profile-name-row button.profile-name-save { border-color: #b98d34; color: #3b2b0a; background: #e5c56f; }
 .profile-name-error { min-height: 14px; margin: 0; color: #b0463b; font: 11px var(--sans); }
 .profile-rank-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.profile-rank-badge { display: inline-block; margin-left: 6px; font: 800 17px var(--serif); letter-spacing: .5px; background: linear-gradient(100deg, #b8860b 0%, #ffd700 30%, #fff3a3 50%, #ffd700 70%, #b8860b 100%) 0 0 / 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 0 4px rgba(255, 200, 40, .55)); animation: rank-shine 3.2s linear infinite; }
+@keyframes rank-shine { to { background-position: -220% 0; } }
+@media (prefers-reduced-motion: reduce) { .profile-rank-badge { animation: none; } }
 .profile-rank-row > span { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid #dbd2c1; border-radius: 16px; color: #294538; background: #fbf8f0; font: 600 11px var(--sans); }
 .profile-flag { font-size: 17px; line-height: 1; }
 
