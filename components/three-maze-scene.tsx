@@ -1246,6 +1246,9 @@ export default function ThreeMazeScene({
     const groundColor = new THREE.Color();
     const sunColor = new THREE.Color();
     const chestPosition = new THREE.Vector3();
+    const indicatorPosition = new THREE.Vector3();
+    let layoutAge = 0;
+    const layout: { indicatorRect?: DOMRect; panelTop?: number; shortcutsRect?: DOMRect; hudBottom: number } = { hudBottom: 0 };
     const animate = () => {
       assets.animationFrame = window.requestAnimationFrame(animate);
       elapsed += 0.01;
@@ -1301,14 +1304,19 @@ export default function ThreeMazeScene({
         camera.zoom += (1 - camera.zoom) * 0.035;
         if (current.phase === "result") assets.suspenseStartedAt = null;
       }
-      const indicatorRect = renderer.domElement.getBoundingClientRect();
-      const panelTop = document.querySelector<HTMLElement>(".next-junction-panel")?.getBoundingClientRect().top;
-      const shortcutsRect = document.querySelector<HTMLElement>(".world-shortcuts")?.getBoundingClientRect();
-      let hudBottom = 0;
-      document.querySelectorAll<HTMLElement>(".immersive-hud > *").forEach((element) => {
-        hudBottom = Math.max(hudBottom, element.getBoundingClientRect().bottom);
-      });
-      const indicatorPosition = new THREE.Vector3();
+      // DOM layout reads are costly, so refresh them a few times per second instead of every frame.
+      if (layoutAge++ % 15 === 0) {
+        layout.indicatorRect = renderer.domElement.getBoundingClientRect();
+        layout.panelTop = document.querySelector<HTMLElement>(".next-junction-panel")?.getBoundingClientRect().top;
+        layout.shortcutsRect = document.querySelector<HTMLElement>(".world-shortcuts")?.getBoundingClientRect();
+        let bottom = 0;
+        document.querySelectorAll<HTMLElement>(".immersive-hud > *").forEach((element) => {
+          bottom = Math.max(bottom, element.getBoundingClientRect().bottom);
+        });
+        layout.hudBottom = bottom;
+      }
+      const { indicatorRect, panelTop, shortcutsRect, hudBottom } = layout;
+      if (!indicatorRect) return;
       current.junction.options.forEach((direction) => {
         const indicator = assets.routeIndicatorElements[direction];
         if (!indicator) return;
@@ -1483,7 +1491,8 @@ export default function ThreeMazeScene({
         to: new THREE.Vector3(0, 0, 0),
         startedAt: now,
         duration: 2600,
-        facing: directionAngles.north,
+        // The explorer keeps walking the way it came in, from the entrance toward the centre.
+        facing: directionAngles[propsRef.current.previous ?? "north"],
       };
       return;
     }
