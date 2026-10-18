@@ -1340,6 +1340,12 @@ body [contenteditable="true"] {
 .rarity-epic { --rarity-color: #b05cf0; }
 .rarity-legendary { --rarity-color: #f5a02d; }
 .rarity-ultrarare { --rarity-color: #ff7ad9; }
+.player-profile-modal .character-choice.choice-rarity { position: relative; overflow: hidden; border-image: none; border: 1px solid color-mix(in srgb, var(--rarity-color) 55%, transparent); border-bottom: 3px solid var(--rarity-color); background: linear-gradient(180deg, color-mix(in srgb, var(--rarity-color) 22%, transparent), rgba(0, 0, 0, .15)); }
+.player-profile-modal .character-choice.choice-rarity img { box-shadow: 0 0 0 2px var(--rarity-color); }
+.player-profile-modal .character-choice .choice-rarity-label { color: var(--rarity-color); font: 700 7px var(--mono); letter-spacing: 1px; text-transform: uppercase; }
+.player-profile-modal .character-choice.profile-explorer-selected .choice-rarity-label { color: #fff; }
+.profile-badge-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--rarity-color, #d9b76d); border-radius: 999px; background: color-mix(in srgb, var(--rarity-color, #d9b76d) 20%, transparent); color: #f4ecd4; font: 600 10px var(--mono); }
+.profile-rank-row { flex-wrap: wrap; gap: 6px; }
 .rarity-legendary::after, .rarity-ultrarare::after { content: ""; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 35%, rgba(255, 255, 255, .22) 50%, transparent 65%); background-size: 250% 100%; animation: card-shine 3.2s linear infinite; pointer-events: none; }
 .rarity-ultrarare { background: linear-gradient(150deg, #5b2a63, #1b3a5a 55%, #5a4a1d); border-image: linear-gradient(135deg, #ffd86b, #ff7ad9, #6fe3ff) 1; }
 @keyframes card-shine { from { background-position: 150% 0; } to { background-position: -100% 0; } }

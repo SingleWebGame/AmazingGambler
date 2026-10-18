@@ -51,6 +51,7 @@ type PublicEntry = {
   score: number;
   characterId: string;
   country: string | null;
+  badgeId: string | null;
   charactersUnlocked: number;
   roomNumber: number;
   updatedAt: number;
@@ -66,6 +67,7 @@ function toEntry(id: string, score: number, fields: Record<string, string>, rank
     score,
     characterId: CHARACTER_PATTERN.test(fields.characterId ?? "") ? fields.characterId : "pip",
     country: COUNTRY_PATTERN.test(fields.country ?? "") ? fields.country : null,
+    badgeId: CHARACTER_PATTERN.test(fields.badgeId ?? "") ? fields.badgeId : null,
     charactersUnlocked: Math.max(1, Number(fields.charactersUnlocked) || 1),
     roomNumber: Math.max(1, Number(fields.roomNumber) || 1),
     updatedAt: Number(fields.updatedAt) || 0,
@@ -144,6 +146,10 @@ export async function POST(request: Request) {
   const score = body.score;
   const characterId = typeof body.characterId === "string" && CHARACTER_PATTERN.test(body.characterId) ? body.characterId : "pip";
   const country = typeof body.country === "string" && COUNTRY_PATTERN.test(body.country) ? body.country : "";
+  // Absent leaves the saved badge alone; an empty or invalid value clears it.
+  const badgeId = body.badgeId === undefined
+    ? undefined
+    : typeof body.badgeId === "string" && CHARACTER_PATTERN.test(body.badgeId) ? body.badgeId : "";
   const charactersUnlocked = body.charactersUnlocked;
   const roomNumber = body.roomNumber;
   const claimOnly = body.claimOnly === true;
@@ -179,6 +185,7 @@ export async function POST(request: Request) {
     // The board follows the current coin balance, so a player who loses coins moves down.
     const changed = !claimOnly && (isNew || score !== Number(existingScore));
     writes.push(["HSET", profileKey(playerId), "name", name.name, "characterId", characterId, "country", country]);
+    if (badgeId !== undefined) writes.push(["HSET", profileKey(playerId), "badgeId", badgeId]);
     if (!claimOnly) {
       writes.push(["HSET", profileKey(playerId), "charactersUnlocked", charactersUnlocked, "roomNumber", roomNumber]);
     }

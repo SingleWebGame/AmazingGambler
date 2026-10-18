@@ -12,6 +12,7 @@ export type LeaderboardEntry = {
   score: number;
   characterId: string;
   country: string | null;
+  badgeId: string | null;
   charactersUnlocked: number;
   roomNumber: number;
   updatedAt: number;
@@ -23,6 +24,8 @@ export type ScoreSubmission = {
   score: number;
   characterId: string;
   country: string | null;
+  // undefined leaves the saved badge untouched; null removes it.
+  badgeId?: string | null;
   charactersUnlocked: number;
   roomNumber: number;
   claimOnly?: boolean;
@@ -58,6 +61,7 @@ function readLocal(): StoredEntry[] {
         score,
         characterId: typeof record.characterId === "string" && CHARACTER_ID.test(record.characterId) ? record.characterId : "pip",
         country: typeof record.country === "string" && COUNTRY_CODE.test(record.country) ? record.country : null,
+        badgeId: typeof record.badgeId === "string" && CHARACTER_ID.test(record.badgeId) ? record.badgeId : null,
         charactersUnlocked: count(record.charactersUnlocked, 1),
         roomNumber: count(record.roomNumber, 1),
         updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : 0,
@@ -91,6 +95,9 @@ function submitLocal(submission: ScoreSubmission, name: string): SubmitResult {
     ?? entries.find((entry) => entry.playerId.startsWith("name:") && entry.playerName.toLowerCase() === key);
   if (entries.some((entry) => entry !== existing && entry.playerName.toLowerCase() === key)) return "name_taken";
   const safeCountry = submission.country && COUNTRY_CODE.test(submission.country) ? submission.country : null;
+  const safeBadge = submission.badgeId === undefined
+    ? undefined
+    : submission.badgeId && CHARACTER_ID.test(submission.badgeId) ? submission.badgeId : null;
   let result: SubmitResult;
   if (!existing) {
     entries.push({
@@ -99,6 +106,7 @@ function submitLocal(submission: ScoreSubmission, name: string): SubmitResult {
       score: submission.score,
       characterId: submission.characterId,
       country: safeCountry,
+      badgeId: safeBadge ?? null,
       charactersUnlocked: submission.charactersUnlocked,
       roomNumber: submission.roomNumber,
       updatedAt: Date.now(),
@@ -110,6 +118,7 @@ function submitLocal(submission: ScoreSubmission, name: string): SubmitResult {
     existing.playerName = name;
     existing.characterId = submission.characterId;
     existing.country = safeCountry;
+    if (safeBadge !== undefined) existing.badgeId = safeBadge;
     if (!submission.claimOnly) {
       existing.charactersUnlocked = submission.charactersUnlocked;
       existing.roomNumber = submission.roomNumber;

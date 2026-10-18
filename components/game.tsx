@@ -35,6 +35,7 @@ import {
   trapDefinitions,
   type Direction,
   type CosmeticCategory,
+  type CosmeticRarity,
   type EventKind,
   type ChestDrop,
   type Junction,
@@ -580,7 +581,25 @@ type ViewedPlayer = {
   score: number;
   roomNumber: number;
   charactersUnlocked: number;
+  badge: { icon: string; label: string; rarity: string } | null;
 };
+
+function badgeFor(id: string | null | undefined) {
+  const badge = id ? cosmeticDefinitions.find((cosmetic) => cosmetic.id === id && cosmetic.category === "badge") : undefined;
+  return badge ? { icon: badge.icon, label: badge.label, rarity: badge.rarity } : null;
+}
+
+function BadgeChip({ badge }: { badge: NonNullable<ViewedPlayer["badge"]> }) {
+  return (
+    <span
+      className="profile-badge-chip"
+      style={{ "--rarity-color": cosmeticRarityColors[badge.rarity as CosmeticRarity] } as React.CSSProperties}
+      title={`${badge.label} · ${badge.rarity}`}
+    >
+      <span aria-hidden="true">{badge.icon}</span> {badge.label}
+    </span>
+  );
+}
 
 function PlayerNameEditor({ playerName, onSaved }: { playerName: string | null; onSaved: (name: string) => void }) {
   const [editing, setEditing] = useState(!playerName);
@@ -655,6 +674,7 @@ function PlayerProfileModal({
   rank,
   totalPlayers,
   viewing,
+  badge,
 }: {
   avatar: string;
   characterName: string;
@@ -673,6 +693,7 @@ function PlayerProfileModal({
   rank: number | null;
   totalPlayers: number;
   viewing: ViewedPlayer | null;
+  badge: ViewedPlayer["badge"];
 }) {
   const unlocked = characters.filter((character) => ownedCharacterIds.includes(character.id));
   if (viewing) {
@@ -693,6 +714,7 @@ function PlayerProfileModal({
             </div>
             <div className="profile-rank-row">
               <span><span className="profile-flag" aria-hidden="true">{countryFlag(viewing.country)}</span>{viewing.country ?? "Unknown"}</span>
+              {viewing.badge && <BadgeChip badge={viewing.badge} />}
             </div>
             <div className="result-grid profile-stats">
               <div><span>TOTAL MONEY</span><strong>${formatCoinBalance(viewing.score)}</strong></div>
@@ -723,6 +745,7 @@ function PlayerProfileModal({
           <PlayerNameEditor playerName={playerName} onSaved={onNameSaved} />
           <div className="profile-rank-row">
             <span><span className="profile-flag" aria-hidden="true">{countryFlag(country)}</span>{country ?? "Unknown"}</span>
+            {badge && <BadgeChip badge={badge} />}
           </div>
           <div className="result-grid profile-stats">
             <div><span>TOTAL COINS EARNED</span><strong>${formatCoinBalance(progress.totalEarned)}</strong></div>
@@ -740,10 +763,10 @@ function PlayerProfileModal({
         <div className="profile-explorer-scroll">
           <div className="character-options">
             {unlocked.map((character) => (
-              <button key={character.id} className={`character-choice ${selectedCharacterId === character.id ? "profile-explorer-selected" : ""}`} onClick={() => onSelect(character)} aria-pressed={selectedCharacterId === character.id}>
+              <button key={character.id} data-rarity={character.rarity} className={`character-choice choice-rarity rarity-${character.rarity.toLowerCase().replace("-", "")} ${selectedCharacterId === character.id ? "profile-explorer-selected" : ""}`} onClick={() => onSelect(character)} aria-pressed={selectedCharacterId === character.id}>
                 <img src={characterPortrait(character)} alt="" />
                 <span>{character.name}</span>
-                {canClose && <small>{selectedCharacterId === character.id ? "exploring" : character.rarity}</small>}
+                <small className="choice-rarity-label">{character.rarity}{selectedCharacterId === character.id && canClose ? " ✓" : ""}</small>
               </button>
             ))}
           </div>
@@ -1762,10 +1785,11 @@ export default function Game() {
       score: game.money,
       characterId: selectedCharacterId,
       country,
+      badgeId: equipped.badge ?? null,
       charactersUnlocked: ownedCharacterIds.length,
       roomNumber: displayRoom,
     });
-  }, [sessionReady, playerName, game.money, selectedCharacterId, country, ownedCharacterIds.length, displayRoom]);
+  }, [sessionReady, playerName, game.money, selectedCharacterId, country, equipped.badge, ownedCharacterIds.length, displayRoom]);
 
   useEffect(() => {
     const refresh = () => {
@@ -1795,6 +1819,7 @@ export default function Game() {
         score: viewedEntry.score,
         roomNumber: viewedEntry.roomNumber,
         charactersUnlocked: viewedEntry.charactersUnlocked,
+        badge: badgeFor(viewedEntry.badgeId),
       }
     : null;
 
@@ -1973,6 +1998,7 @@ export default function Game() {
             rank={rankInfo.rank}
             totalPlayers={rankInfo.total}
             viewing={viewedPlayer}
+            badge={badgeFor(equipped.badge)}
           />
         )}
         {showTutorial && <TutorialModal onClose={closeTutorial} onTour={() => { setShowTutorial(false); setShowTour(true); }} />}
