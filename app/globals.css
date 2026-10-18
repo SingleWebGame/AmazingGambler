@@ -1083,13 +1083,11 @@ body {
 .lb-item button { width: 100%; min-height: 28px; display: grid; grid-template-columns: 12px 20px minmax(0, 1fr) auto; align-items: center; gap: 5px; padding: 3px 6px 3px 4px; border: 1px solid transparent; border-radius: 9px; color: #f1e5c5; background: rgba(27, 45, 37, .5); cursor: pointer; text-align: left; font: 600 10px var(--sans); transition: background .6s ease, border-color .6s ease; }
 .lb-item button:hover, .lb-item button:focus-visible { border-color: #e1c37e; background: rgba(46, 66, 51, .9); outline: none; }
 .lb-rank { color: #b9a877; font: 700 9px var(--mono); text-align: center; }
-.lb-leader .lb-rank { color: #ffd45a; }
 .lb-item img { width: 20px; height: 20px; border: 1px solid rgba(230, 197, 124, .5); border-radius: 50%; object-fit: cover; }
 .lb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lb-balance-row { display: flex; align-items: center; gap: 3px; }
 .lb-coin-icon { width: 11px; height: 11px; display: grid; flex: 0 0 auto; place-items: center; border: 1px solid #f2d883; border-radius: 50%; color: #845a1f; background: radial-gradient(circle at 35% 28%, #fff1ae 0 7%, #ebc45d 25%, #b57c27 73%, #79511e 100%); box-shadow: inset 0 0 0 1px #c49137, 0 1px 2px rgba(8, 12, 8, .35); font: 700 7px Georgia, serif; text-shadow: 0 1px #fff0ae; }
 .lb-balance { color: #e2d3a7; white-space: nowrap; font: 9px var(--mono); }
-.lb-leader button { border-color: rgba(240, 211, 143, .45); background: linear-gradient(135deg, rgba(88, 70, 30, .55), rgba(27, 45, 37, .6)); }
 .lb-you button { border-color: rgba(142, 175, 124, .85); background: rgba(58, 88, 62, .6); }
 .lb-gap { color: rgba(236, 235, 211, .5); text-align: center; line-height: 6px; font-size: 10px; }
 

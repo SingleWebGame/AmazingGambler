@@ -37,7 +37,7 @@ export default function LeaderboardPanel({ playerName, resolveAvatar, onSelect, 
         key={`${entry.playerName.toLowerCase()}`}
         layout="position"
         transition={slowMove}
-        className={`lb-item ${isYou ? "lb-you" : ""} ${entry.rank === 1 ? "lb-leader" : ""}`}
+        className={`lb-item ${isYou ? "lb-you" : ""}`}
       >
         <button
           type="button"
